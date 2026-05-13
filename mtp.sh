@@ -3,9 +3,9 @@
 # =============================================
 # MTProto Proxy Installer with Fake TLS
 # Author: yurichdelaet
-# GitHub: https://github.com/yurichdelaet/mtproto-proxy
+# GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 3.3 (fixed global command)
+# Version: 3.4 (fixed global command + domain support)
 # =============================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v3.3${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v3.4${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Global command: yurich | TUI Menu${CYAN}              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -104,15 +104,33 @@ pull_docker_image() {
 
 get_params() {
     echo ""
-    step "Настройка прокси (Enter = значения по умолчанию)"
+    step "Настройка прокси"
     read -p "Введите порт [8443]: " PROXY_PORT
     PROXY_PORT=${PROXY_PORT:-8443}
-    read -p "Домен маскировки [cloudflare.com]: " DOMAIN
-    DOMAIN=${DOMAIN:-cloudflare.com}
     if ! [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || [ "$PROXY_PORT" -lt 1 ] || [ "$PROXY_PORT" -gt 65535 ]; then
         error "Неверный порт"
     fi
-    success "Порт: $PROXY_PORT, домен: $DOMAIN"
+
+    echo ""
+    echo -e "${YELLOW}Выберите тип адреса для подключения:${NC}"
+    echo "   1) IP-адрес (автоопределение)"
+    echo "   2) Домен (введите вручную)"
+    read -p "Ваш выбор (1 или 2): " ADDR_TYPE
+    if [[ "$ADDR_TYPE" == "2" ]]; then
+        read -p "Введите ваш домен (например: proxy.example.com): " CUSTOM_DOMAIN
+        if [[ -z "$CUSTOM_DOMAIN" ]]; then
+            error "Домен не может быть пустым"
+        fi
+        SERVER_ADDR="$CUSTOM_DOMAIN"
+        success "Будет использован домен: $CUSTOM_DOMAIN"
+    else
+        SERVER_ADDR=""  # будет определён позже как IP
+        success "Будет использован IP-адрес сервера"
+    fi
+
+    read -p "Домен маскировки (Fake TLS) [cloudflare.com]: " DOMAIN
+    DOMAIN=${DOMAIN:-cloudflare.com}
+    success "Порт: $PROXY_PORT, домен маскировки: $DOMAIN"
 }
 
 generate_secret() {
@@ -146,11 +164,19 @@ run_container() {
 }
 
 get_public_ip() {
-    IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || curl -s -4 ipinfo.io/ip)
-    if [[ -z "$IP" ]]; then
-        warn "Не удалось определить IP автоматически"
-        read -p "Введите IP сервера вручную: " IP
-        [[ -z "$IP" ]] && error "IP не введён"
+    if [[ -n "$SERVER_ADDR" ]]; then
+        IP="$SERVER_ADDR"
+        success "Используем домен: $IP"
+    else
+        step "Определяем внешний IP..."
+        IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || curl -s -4 ipinfo.io/ip)
+        if [[ -z "$IP" ]]; then
+            warn "Не удалось определить IP автоматически"
+            read -p "Введите IP сервера вручную: " IP
+            [[ -z "$IP" ]] && error "IP не введён"
+        else
+            success "IP: $IP"
+        fi
     fi
 }
 
@@ -181,6 +207,7 @@ get_proxy_link() {
 }
 
 create_global_command() {
+    # Создаём глобальную команду yurich
     cat > /usr/local/bin/yurich << 'EOF'
 #!/bin/bash
 if [[ "$EUID" -ne 0 ]]; then
@@ -242,7 +269,7 @@ show_info() {
     else
         DOMAIN="cloudflare.com"
     fi
-    echo -e "   ${BOLD}IP-адрес сервера:${NC}     ${YELLOW}${IP}${NC}"
+    echo -e "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}${IP}${NC}"
     echo -e "   ${BOLD}Порт:${NC}                 ${YELLOW}${PROXY_PORT}${NC}"
     echo -e "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}${DOMAIN}${NC}"
     echo -e "   ${BOLD}Fake TLS секрет (ПОЛНЫЙ):${NC}"
@@ -268,8 +295,8 @@ update_script() {
     else
         echo -e "${RED}❌ Репозиторий не найден. Скачиваем заново...${NC}"
         cd /tmp
-        git clone https://github.com/yurichdelaet/mtproto-proxy.git
-        cp mtproto-proxy/mtp.sh "$SCRIPT_DIR/mtp.sh"
+        git clone https://github.com/Pykucyka/yurichdelaetMTPoto-proxy.git
+        cp yurichdelaetMTPoto-proxy/mtp.sh "$SCRIPT_DIR/mtp.sh"
         chmod +x "$SCRIPT_DIR/mtp.sh"
         echo -e "${GREEN}✅ Скрипт обновлён.${NC}"
     fi
@@ -289,10 +316,7 @@ reinstall_proxy() {
         PROXY_PORT=$(docker inspect mtproxy | grep -oP '"HostPort":\s*"\K[^"]+' | head -1)
     else
         echo -e "Генерация нового секрета..."
-        read -p "Введите порт [8443]: " PROXY_PORT
-        PROXY_PORT=${PROXY_PORT:-8443}
-        read -p "Домен маскировки [cloudflare.com]: " DOMAIN
-        DOMAIN=${DOMAIN:-cloudflare.com}
+        get_params
         generate_secret
     fi
     docker rm -f mtproxy 2>/dev/null || true
@@ -330,7 +354,34 @@ restart_proxy() {
     read
 }
 
+change_domain() {
+    clear
+    banner
+    echo -e "${GREEN}🌐 ИЗМЕНЕНИЕ ДОМЕНА/IP${NC}"
+    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+    echo -e "Текущий адрес: ${YELLOW}${IP}${NC}"
+    read -p "Введите новый домен или IP (оставьте пустым для автоопределения IP): " NEW_ADDR
+    if [[ -n "$NEW_ADDR" ]]; then
+        IP="$NEW_ADDR"
+        success "Адрес изменён на: $IP"
+        # Обновляем ссылку в информации
+        echo -e "${GREEN}✅ Адрес обновлён. Используйте новый в Telegram.${NC}"
+    else
+        # автоопределение IP
+        NEW_IP=$(curl -s -4 ifconfig.me)
+        if [[ -n "$NEW_IP" ]]; then
+            IP="$NEW_IP"
+            success "IP обновлён автоматически: $IP"
+        else
+            warn "Не удалось определить IP автоматически, оставлен старый: $IP"
+        fi
+    fi
+    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
+    read
+}
+
 show_menu() {
+    # Получаем текущий IP/домен один раз при входе в меню
     IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || echo "unknown")
     while true; do
         clear
@@ -341,21 +392,23 @@ show_menu() {
         echo ""
         echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика прокси (нагрузка, подключения)${NC}"
         echo -e "   ${CYAN}2${NC} ─ ${YELLOW}ℹ️  Информация о прокси (секрет, ссылка)${NC}"
-        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}🔄 Обновить скрипт до актуального коммита${NC}"
-        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🔁 Переустановить прокси (сохраняя секрет)${NC}"
-        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}📜 Просмотр последних логов${NC}"
-        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}♻️  Перезапустить прокси-контейнер${NC}"
+        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}🌐 Изменить домен/IP для подключения${NC}"
+        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🔄 Обновить скрипт до актуального коммита${NC}"
+        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}🔁 Переустановить прокси (сохраняя секрет)${NC}"
+        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}📜 Просмотр последних логов${NC}"
+        echo -e "   ${CYAN}7${NC} ─ ${YELLOW}♻️  Перезапустить прокси-контейнер${NC}"
         echo -e "   ${CYAN}0${NC} ─ ${RED}🚪 Выход (вернуться в командную строку)${NC}"
         echo ""
-        echo -ne "${BOLD}Выберите пункт меню (0-6): ${NC}"
+        echo -ne "${BOLD}Выберите пункт меню (0-7): ${NC}"
         read choice
         case $choice in
             1) show_stats ;;
             2) show_info ;;
-            3) update_script ;;
-            4) reinstall_proxy ;;
-            5) view_logs ;;
-            6) restart_proxy ;;
+            3) change_domain ;;
+            4) update_script ;;
+            5) reinstall_proxy ;;
+            6) view_logs ;;
+            7) restart_proxy ;;
             0)
                 clear
                 echo -e "${GREEN}До свидания! Для повторного входа выполните: sudo yurich${NC}"
@@ -380,9 +433,24 @@ install_proxy() {
     get_public_ip
     open_firewall
     get_proxy_link
+    # Сохраняем сам скрипт в /opt/mtproto-proxy/
     mkdir -p /opt/mtproto-proxy
-    cp "$0" /opt/mtproto-proxy/mtp.sh
-    chmod +x /opt/mtproto-proxy/mtp.sh
+    # Определяем, откуда запущен скрипт (если через curl, то временный файл)
+    SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+    if [[ "$SCRIPT_SOURCE" == "/dev/fd/"* ]] || [[ ! -f "$SCRIPT_SOURCE" ]]; then
+        # Скрипт запущен через pipe, нужно сохранить его содержимое
+        cat > /opt/mtproto-proxy/mtp.sh << 'INNEREOF'
+# Сюда будет вставлено содержимое скрипта. Используем временный костыль.
+# На самом деле мы сейчас перезаписываем этот же блок, поэтому лучше просто скопировать текущий файл.
+# Вместо этого мы используем другой подход: скачаем скрипт из репозитория.
+INNEREOF
+        # Скачиваем сам себя из репозитория
+        curl -s -o /opt/mtproto-proxy/mtp.sh "https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh"
+        chmod +x /opt/mtproto-proxy/mtp.sh
+    else
+        cp "$SCRIPT_SOURCE" /opt/mtproto-proxy/mtp.sh
+        chmod +x /opt/mtproto-proxy/mtp.sh
+    fi
     create_global_command
     print_result
 }
@@ -394,7 +462,7 @@ print_result() {
     echo ""
     echo -e "${CYAN}📡 ПАРАМЕТРЫ ПРОКСИ${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    printf "   ${BOLD}IP-адрес сервера:${NC}     ${YELLOW}%s${NC}\n" "$IP"
+    printf "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}%s${NC}\n" "$IP"
     printf "   ${BOLD}Порт:${NC}                 ${YELLOW}%s${NC}\n" "$PROXY_PORT"
     printf "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}%s${NC}\n" "$DOMAIN"
     printf "   ${BOLD}Fake TLS секрет (ПОЛНЫЙ):${NC}\n"
@@ -422,7 +490,7 @@ print_result() {
 show_github_link() {
     echo -e "${YELLOW}${BLINK}══════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}${BLINK}   ⭐ Если скрипт был полезен, поставь звезду на GitHub!   ${NC}"
-    echo -e "${YELLOW}${BLINK}   👉 https://github.com/yurichdelaet/mtproto-proxy       ${NC}"
+    echo -e "${YELLOW}${BLINK}   👉 https://github.com/Pykucyka/yurichdelaetMTPoto-proxy${NC}"
     echo -e "${YELLOW}${BLINK}══════════════════════════════════════════════════════════${NC}"
     echo ""
 }
