@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# MTProto Proxy Installer with Telemt (Fake TLS, reliable download)
+# MTProto Proxy Installer with Telemt (Fake TLS)
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.7 (fixed curl hanging, direct download)
+# Version: 7.7 (reliable download with fallback)
 # ============================================================
 
 set -euo pipefail
@@ -74,7 +74,7 @@ check_root() {
     fi
 }
 
-# ---------- Ввод параметров (один раз) ----------
+# ---------- Ввод параметров ----------
 get_params() {
     echo ""
     echo -e "${YELLOW}Выберите язык для вывода сообщений:${NC}"
@@ -126,7 +126,7 @@ get_params() {
     fi
 }
 
-# ---------- Установка telemt (надёжная загрузка без зависаний) ----------
+# ---------- Установка telemt (надёжная) ----------
 install_telemt_binary() {
     step "Загружаем последнюю версию telemt из GitHub..."
     ARCH=$(uname -m)
@@ -136,27 +136,22 @@ install_telemt_binary() {
         *) error "Неподдерживаемая архитектура: $ARCH" ;;
     esac
     
-    # Пробуем получить URL через API с таймаутом
-    url=""
-    if command -v curl &>/dev/null; then
-        url=$(curl -s --max-time 5 https://api.github.com/repos/telemt/telemt/releases/latest 2>/dev/null | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep "linux.*${ARCH}" | head -1 || echo "")
-    fi
-    if [[ -z "$url" ]]; then
-        warn "GitHub API не ответил, используем прямой URL (версия v0.5.0)"
-        url="https://github.com/telemt/telemt/releases/download/v0.5.0/telemt-linux-${ARCH}"
+    # Пробуем получить URL через GitHub API (таймаут 5 сек)
+    step "Проверка наличия новой версии на GitHub..."
+    URL=$(curl -s --max-time 5 https://api.github.com/repos/telemt/telemt/releases/latest | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep "linux.*${ARCH}" | head -1)
+    
+    if [[ -z "$URL" ]]; then
+        warn "GitHub API не ответил, используем стабильную версию 0.5.0"
+        URL="https://github.com/telemt/telemt/releases/download/v0.5.0/telemt-linux-${ARCH}"
     fi
     
-    # Скачиваем с прогрессом через curl с таймаутом и без подвисаний
-    (
-        curl -L -o /usr/local/bin/telemt --connect-timeout 10 --max-time 60 "$url"
-    ) &
-    spinner $!
-    if [[ -f /usr/local/bin/telemt && -s /usr/local/bin/telemt ]]; then
-        chmod +x /usr/local/bin/telemt
-        success "Telemt установлен в /usr/local/bin/telemt"
-    else
-        error "Не удалось загрузить telemt. Проверьте интернет и повторите."
+    step "Скачивание бинарного файла (это может занять несколько секунд)..."
+    curl -L --progress-bar --connect-timeout 10 --max-time 30 -o /usr/local/bin/telemt "$URL"
+    if [[ $? -ne 0 ]]; then
+        error "Не удалось скачать telemt. Проверьте интернет-соединение."
     fi
+    chmod +x /usr/local/bin/telemt
+    success "Telemt установлен в /usr/local/bin/telemt"
 }
 
 # ---------- Создание конфига ----------
