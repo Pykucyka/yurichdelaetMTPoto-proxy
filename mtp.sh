@@ -74,7 +74,6 @@ check_root() {
     fi
 }
 
-# ---------- Ввод параметров ----------
 get_params() {
     echo ""
     echo -e "${YELLOW}Выберите язык для вывода сообщений:${NC}"
@@ -82,10 +81,8 @@ get_params() {
     echo "   2) Русский"
     read -p "Ваш выбор [1/2]: " LANG_CHOICE
     if [[ "$LANG_CHOICE" == "2" ]]; then
-        LANG_RU=1
         success "Выбран русский язык"
     else
-        LANG_RU=0
         success "Selected English language"
     fi
 
@@ -126,9 +123,9 @@ get_params() {
     fi
 }
 
-# ---------- Установка telemt (надёжная) ----------
+# ---------- Надёжная установка telemt ----------
 install_telemt_binary() {
-    step "Загружаем последнюю версию telemt из GitHub..."
+    step "Загружаем telemt..."
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64)  ARCH="amd64" ;;
@@ -136,8 +133,8 @@ install_telemt_binary() {
         *) error "Неподдерживаемая архитектура: $ARCH" ;;
     esac
     
-    # Пробуем получить URL через GitHub API (таймаут 5 сек)
-    step "Проверка наличия новой версии на GitHub..."
+    # Пробуем GitHub API с таймаутом, если не работает — используем прямую ссылку на v0.5.0
+    step "Проверка наличия последней версии..."
     URL=$(curl -s --max-time 5 https://api.github.com/repos/telemt/telemt/releases/latest | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep "linux.*${ARCH}" | head -1)
     
     if [[ -z "$URL" ]]; then
@@ -145,18 +142,14 @@ install_telemt_binary() {
         URL="https://github.com/telemt/telemt/releases/download/v0.5.0/telemt-linux-${ARCH}"
     fi
     
-    step "Скачивание бинарного файла (это может занять несколько секунд)..."
+    step "Скачивание (это может занять несколько секунд)..."
     curl -L --progress-bar --connect-timeout 10 --max-time 30 -o /usr/local/bin/telemt "$URL"
-    if [[ $? -ne 0 ]]; then
-        error "Не удалось скачать telemt. Проверьте интернет-соединение."
-    fi
     chmod +x /usr/local/bin/telemt
     success "Telemt установлен в /usr/local/bin/telemt"
 }
 
-# ---------- Создание конфига ----------
 create_telemt_config() {
-    step "Создаём конфиг Telemt с Fake TLS секретом..."
+    step "Создаём конфиг Telemt..."
     SECRET_PREFIX="ee"
     RANDOM_KEY=$(openssl rand -hex 16)
     DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
@@ -179,9 +172,8 @@ EOF
     success "Конфиг создан (/etc/telemt/config.toml)"
 }
 
-# ---------- Запуск сервиса ----------
 enable_telemt_service() {
-    step "Настраиваем systemd сервис для Telemt..."
+    step "Настраиваем systemd сервис..."
     cat > /etc/systemd/system/telemt.service << EOF
 [Unit]
 Description=Telemt MTProto Proxy
@@ -204,7 +196,6 @@ EOF
     success "Telemt запущен как systemd сервис"
 }
 
-# ---------- Получение адреса сервера ----------
 get_server_addr() {
     if [[ -n "$SERVER_ADDR" ]]; then
         SERVER="$SERVER_ADDR"
@@ -222,7 +213,6 @@ get_server_addr() {
     fi
 }
 
-# ---------- Открытие порта ----------
 open_firewall() {
     if command -v ufw &> /dev/null; then
         step "Открываем порт $PROXY_PORT в UFW..."
@@ -238,13 +228,11 @@ open_firewall() {
     fi
 }
 
-# ---------- Ссылка ----------
 get_proxy_link() {
     PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${SECRET}"
     success "Ссылка для подключения готова"
 }
 
-# ---------- Глобальная команда yurich ----------
 create_global_command() {
     cat > /usr/local/bin/yurich << 'EOF'
 #!/bin/bash
@@ -276,7 +264,6 @@ EOF
     success "Глобальная команда 'yurich' создана (запускайте: sudo yurich)"
 }
 
-# ---------- Финальный вывод ----------
 print_result() {
     clear
     banner
