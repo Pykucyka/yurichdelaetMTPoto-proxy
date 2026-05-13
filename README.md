@@ -157,9 +157,8 @@ rm -rf /opt/mtproto-proxy
 💰 Поддержать проект
 Если вам понравился скрипт и вы хотите поддержать его развитие, можете отправить донат на TON-кошелёк:
 
-text
 UQBPaI8FG9jqxsuPVcdTToJtUqaxVOmST6pFSeB_kMCOe0zO
-https://img.shields.io/badge/Donate-TON-0098ea?style=for-the-badge&logo=telegram&logoColor=white
+
 
 Любая сумма – это мотивация делать скрипт ещё удобнее и стабильнее. Спасибо! ❤️
 
