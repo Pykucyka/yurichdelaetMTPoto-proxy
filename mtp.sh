@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.5 (direct binary download, no interactive installer)
+# Version: 7.6 (fixed github api, progress)
 # ============================================================
 
 set -euo pipefail
@@ -57,8 +57,8 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v7.5${CYAN}                                ║${NC}"
-    echo -e "${CYAN}║${NC}              ${WHITE}Telemt (binary) | Fake TLS on port 443${CYAN}         ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v7.6${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}              ${WHITE}Telemt (native) | Fake TLS on port 443${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -76,7 +76,6 @@ check_root() {
 
 # ---------- Ввод параметров (один раз) ----------
 get_params() {
-    # Язык для информационных сообщений (не для установщика)
     echo ""
     echo -e "${YELLOW}Выберите язык для вывода сообщений:${NC}"
     echo "   1) English"
@@ -90,13 +89,11 @@ get_params() {
         success "Selected English language"
     fi
 
-    # Домен маскировки
     echo ""
     read -p "Введите домен маскировки (Fake TLS) [1c.ru]: " FAKE_DOMAIN
     FAKE_DOMAIN=${FAKE_DOMAIN:-1c.ru}
     success "Домен маскировки: $FAKE_DOMAIN"
 
-    # Порт
     read -p "Введите порт для прокси (рекомендуется 443) [443]: " PROXY_PORT
     PROXY_PORT=${PROXY_PORT:-443}
     if ! [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || [ "$PROXY_PORT" -lt 1 ] || [ "$PROXY_PORT" -gt 65535 ]; then
@@ -104,7 +101,6 @@ get_params() {
     fi
     success "Порт: $PROXY_PORT"
 
-    # Тип адреса
     echo ""
     echo -e "${YELLOW}Выберите тип адреса для подключения:${NC}"
     echo "   1) IP-адрес (автоопределение)"
@@ -130,27 +126,30 @@ get_params() {
     fi
 }
 
-# ---------- Установка бинарного telemt из GitHub releases ----------
+# ---------- Установка telemt (прямая загрузка последней версии) ----------
 install_telemt_binary() {
     step "Загружаем последнюю версию telemt из GitHub..."
-    # Определяем архитектуру
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64)  ARCH="amd64" ;;
         aarch64) ARCH="arm64" ;;
         *) error "Неподдерживаемая архитектура: $ARCH" ;;
     esac
-    # Получаем URL последнего релиза
-    LATEST_URL=$(curl -s https://api.github.com/repos/telemt/telemt/releases/latest | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep "linux.*${ARCH}" | head -1)
-    if [[ -z "$LATEST_URL" ]]; then
-        error "Не удалось найти бинарный файл для $ARCH"
+    # Используем прямой URL к последнему релизу (без API, чтобы не висело)
+    # Для telemt последняя версия на момент написания: v0.5.0, но будем получать динамически через API с таймаутом
+    local url
+    url=$(curl -s --max-time 5 https://api.github.com/repos/telemt/telemt/releases/latest | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep "linux.*${ARCH}" | head -1)
+    if [[ -z "$url" ]]; then
+        warn "Не удалось получить URL через API, пробуем fallback..."
+        # Fallback: используем известную последнюю версию (обновляется редко)
+        url="https://github.com/telemt/telemt/releases/download/v0.5.0/telemt-linux-${ARCH}"
     fi
-    curl -L -o /usr/local/bin/telemt "$LATEST_URL"
+    curl -L --progress-bar -o /usr/local/bin/telemt "$url"
     chmod +x /usr/local/bin/telemt
     success "Telemt установлен в /usr/local/bin/telemt"
 }
 
-# ---------- Создание конфига с Fake TLS ----------
+# ---------- Создание конфига ----------
 create_telemt_config() {
     step "Создаём конфиг Telemt с Fake TLS секретом..."
     SECRET_PREFIX="ee"
@@ -160,7 +159,6 @@ create_telemt_config() {
     
     mkdir -p /etc/telemt
     cat > /etc/telemt/config.toml << EOF
-# Telemt configuration with Fake TLS
 secret = "$SECRET"
 bind = "0.0.0.0:$PROXY_PORT"
 users = []
@@ -176,7 +174,7 @@ EOF
     success "Конфиг создан (/etc/telemt/config.toml)"
 }
 
-# ---------- Настройка systemd сервиса ----------
+# ---------- Запуск сервиса ----------
 enable_telemt_service() {
     step "Настраиваем systemd сервис для Telemt..."
     cat > /etc/systemd/system/telemt.service << EOF
@@ -235,7 +233,7 @@ open_firewall() {
     fi
 }
 
-# ---------- Формирование ссылки ----------
+# ---------- Ссылка ----------
 get_proxy_link() {
     PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${SECRET}"
     success "Ссылка для подключения готова"
