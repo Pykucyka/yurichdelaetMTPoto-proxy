@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# MTProto Proxy Installer with Telemt (Fake TLS, no duplication)
+# MTProto Proxy Installer with Telemt (Fake TLS, no duplicates)
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.4 (fixed duplicate questions, correct fake tls)
+# Version: 7.5 (direct binary download, no interactive installer)
 # ============================================================
 
 set -euo pipefail
@@ -57,8 +57,8 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v7.4${CYAN}                                ║${NC}"
-    echo -e "${CYAN}║${NC}              ${WHITE}Telemt (native) | Fake TLS on port 443${CYAN}         ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v7.5${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}              ${WHITE}Telemt (binary) | Fake TLS on port 443${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -76,21 +76,21 @@ check_root() {
 
 # ---------- Ввод параметров (один раз) ----------
 get_params() {
-    # Язык для установщика Telemt (будет передан через переменную)
+    # Язык для информационных сообщений (не для установщика)
     echo ""
-    echo -e "${YELLOW}Выберите язык для установщика Telemt:${NC}"
-    echo "   1) English (default)"
+    echo -e "${YELLOW}Выберите язык для вывода сообщений:${NC}"
+    echo "   1) English"
     echo "   2) Русский"
     read -p "Ваш выбор [1/2]: " LANG_CHOICE
     if [[ "$LANG_CHOICE" == "2" ]]; then
-        TELEMT_LANG="2"
+        LANG_RU=1
         success "Выбран русский язык"
     else
-        TELEMT_LANG="1"
-        success "Выбран английский язык"
+        LANG_RU=0
+        success "Selected English language"
     fi
 
-    # Домен маскировки (один раз)
+    # Домен маскировки
     echo ""
     read -p "Введите домен маскировки (Fake TLS) [1c.ru]: " FAKE_DOMAIN
     FAKE_DOMAIN=${FAKE_DOMAIN:-1c.ru}
@@ -130,22 +130,29 @@ get_params() {
     fi
 }
 
-# ---------- Установка Telemt без интерактива (только бинарник) ----------
+# ---------- Установка бинарного telemt из GitHub releases ----------
 install_telemt_binary() {
-    step "Устанавливаем Telemt (официальный бинарный файл) без конфига..."
-    # Передаём параметры, чтобы скрипт не задавал вопросы
-    export TELEMT_LANG="$TELEMT_LANG"
-    export TELEMT_TLS_DOMAIN="$FAKE_DOMAIN"
-    export TELEMT_SKIP_CONF=1   # не создавать конфиг, мы сделаем сами
-    export TELEMT_NONINTERACTIVE=1
-    curl -fsSL https://raw.githubusercontent.com/telemt/telemt/main/install.sh | sh
-    success "Бинарный файл Telemt установлен"
+    step "Загружаем последнюю версию telemt из GitHub..."
+    # Определяем архитектуру
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)  ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+        *) error "Неподдерживаемая архитектура: $ARCH" ;;
+    esac
+    # Получаем URL последнего релиза
+    LATEST_URL=$(curl -s https://api.github.com/repos/telemt/telemt/releases/latest | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep "linux.*${ARCH}" | head -1)
+    if [[ -z "$LATEST_URL" ]]; then
+        error "Не удалось найти бинарный файл для $ARCH"
+    fi
+    curl -L -o /usr/local/bin/telemt "$LATEST_URL"
+    chmod +x /usr/local/bin/telemt
+    success "Telemt установлен в /usr/local/bin/telemt"
 }
 
-# ---------- Создание собственного конфига с Fake TLS ----------
+# ---------- Создание конфига с Fake TLS ----------
 create_telemt_config() {
     step "Создаём конфиг Telemt с Fake TLS секретом..."
-    # Генерируем правильный Fake TLS секрет: ee + 32 случайных hex + домен в hex
     SECRET_PREFIX="ee"
     RANDOM_KEY=$(openssl rand -hex 16)
     DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
@@ -167,10 +174,9 @@ trace = false
 tls_domain = "$FAKE_DOMAIN"
 EOF
     success "Конфиг создан (/etc/telemt/config.toml)"
-    success "Секрет сгенерирован: $SECRET"
 }
 
-# ---------- Запуск Telemt как systemd сервис ----------
+# ---------- Настройка systemd сервиса ----------
 enable_telemt_service() {
     step "Настраиваем systemd сервис для Telemt..."
     cat > /etc/systemd/system/telemt.service << EOF
@@ -195,7 +201,7 @@ EOF
     success "Telemt запущен как systemd сервис"
 }
 
-# ---------- Получение IP/домена сервера ----------
+# ---------- Получение адреса сервера ----------
 get_server_addr() {
     if [[ -n "$SERVER_ADDR" ]]; then
         SERVER="$SERVER_ADDR"
@@ -229,7 +235,7 @@ open_firewall() {
     fi
 }
 
-# ---------- Готовим ссылку ----------
+# ---------- Формирование ссылки ----------
 get_proxy_link() {
     PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${SECRET}"
     success "Ссылка для подключения готова"
