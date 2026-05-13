@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# MTProto Proxy Installer with Telemt (Fake TLS)
+# MTProto Proxy Installer (Telemt from source)
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 8.0 (fixed menu and self-install)
+# Version: 11.0 (build from source, always latest)
 # ============================================================
 
 set -euo pipefail
 
-# ---------- Цвета ----------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -22,22 +21,6 @@ BOLD='\033[1m'
 BLINK='\033[5m'
 NC='\033[0m'
 
-# ---------- Спиннер ----------
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while ps -p "$pid" &>/dev/null; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
-
-# ---------- Баннер ----------
 banner() {
     clear
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -57,8 +40,8 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v8.0${CYAN}                                ║${NC}"
-    echo -e "${CYAN}║${NC}              ${WHITE}Telemt (native) | Fake TLS on port 443${CYAN}         ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v11.0${CYAN}                               ║${NC}"
+    echo -e "${CYAN}║${NC}              ${WHITE}Telemt (built from source) | Fake TLS${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -74,7 +57,35 @@ check_root() {
     fi
 }
 
-# ---------- Ввод параметров (один раз) ----------
+install_rust() {
+    if ! command -v cargo &> /dev/null; then
+        step "Rust не найден. Устанавливаем..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
+        success "Rust установлен"
+    else
+        success "Rust уже установлен"
+    fi
+}
+
+build_telemt() {
+    step "Клонируем репозиторий telemt..."
+    cd /opt
+    rm -rf telemt
+    git clone https://github.com/telemt/telemt
+    cd telemt
+
+    step "Сборка telemt (cargo build --release)..."
+    cargo build --release
+    if [[ ! -f ./target/release/telemt ]]; then
+        error "Сборка не удалась"
+    fi
+
+    cp ./target/release/telemt /usr/local/bin/telemt
+    chmod +x /usr/local/bin/telemt
+    success "Telemt собран и установлен в /usr/local/bin/telemt"
+}
+
 get_params() {
     echo ""
     echo -e "${YELLOW}Выберите язык для вывода сообщений:${NC}"
@@ -92,7 +103,7 @@ get_params() {
     FAKE_DOMAIN=${FAKE_DOMAIN:-1c.ru}
     success "Домен маскировки: $FAKE_DOMAIN"
 
-    read -p "Введите порт для прокси (рекомендуется 443) [443]: " PROXY_PORT
+    read -p "Введите порт для прокси [443]: " PROXY_PORT
     PROXY_PORT=${PROXY_PORT:-443}
     if ! [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || [ "$PROXY_PORT" -lt 1 ] || [ "$PROXY_PORT" -gt 65535 ]; then
         error "Неверный порт"
@@ -124,36 +135,20 @@ get_params() {
     fi
 }
 
-# ---------- Установка telemt ----------
-install_telemt_binary() {
-    step "Загружаем telemt (стабильная версия 0.5.0)..."
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        x86_64)  ARCH="amd64" ;;
-        aarch64) ARCH="arm64" ;;
-        *) error "Неподдерживаемая архитектура: $ARCH. Поддерживаются только x86_64 и arm64." ;;
-    esac
-
-    URL="https://github.com/telemt/telemt/releases/download/v0.5.0/telemt-linux-${ARCH}"
-    step "Скачивание с $URL"
-    curl -L --progress-bar --connect-timeout 15 --max-time 60 -o /usr/local/bin/telemt "$URL"
-    if [[ ! -f /usr/local/bin/telemt ]]; then
-        error "Не удалось скачать telemt. Проверьте соединение с GitHub."
-    fi
-    chmod +x /usr/local/bin/telemt
-    success "Telemt установлен в /usr/local/bin/telemt"
-}
-
-# ---------- Конфигурация ----------
-create_telemt_config() {
-    step "Создаём конфиг Telemt с Fake TLS секретом..."
+generate_secret() {
+    step "Генерация Fake TLS секрета..."
     SECRET_PREFIX="ee"
     RANDOM_KEY=$(openssl rand -hex 16)
     DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
     SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
+    success "Секрет создан"
+}
 
+create_config() {
+    step "Создаём конфиг /etc/telemt/config.toml..."
     mkdir -p /etc/telemt
     cat > /etc/telemt/config.toml << EOF
+# Telemt configuration with Fake TLS
 secret = "$SECRET"
 bind = "0.0.0.0:$PROXY_PORT"
 users = []
@@ -166,12 +161,11 @@ trace = false
 [censorship]
 tls_domain = "$FAKE_DOMAIN"
 EOF
-    success "Конфиг создан (/etc/telemt/config.toml)"
+    success "Конфиг создан"
 }
 
-# ---------- Сервис systemd ----------
-enable_telemt_service() {
-    step "Настраиваем systemd сервис для Telemt..."
+create_systemd_service() {
+    step "Настраиваем systemd сервис..."
     cat > /etc/systemd/system/telemt.service << EOF
 [Unit]
 Description=Telemt MTProto Proxy
@@ -191,16 +185,14 @@ EOF
     systemctl daemon-reload
     systemctl enable telemt
     systemctl start telemt
-    # Проверка статуса
     sleep 2
     if systemctl is-active --quiet telemt; then
-        success "Telemt запущен как systemd сервис"
+        success "Telemt сервис запущен"
     else
-        warn "Сервис telemt не запустился. Проверьте логи: journalctl -u telemt"
+        warn "Сервис не запустился. Проверьте логи: journalctl -u telemt"
     fi
 }
 
-# ---------- Адрес сервера ----------
 get_server_addr() {
     if [[ -n "$SERVER_ADDR" ]]; then
         SERVER="$SERVER_ADDR"
@@ -218,7 +210,6 @@ get_server_addr() {
     fi
 }
 
-# ---------- Файрвол ----------
 open_firewall() {
     if command -v ufw &> /dev/null; then
         step "Открываем порт $PROXY_PORT в UFW..."
@@ -234,111 +225,59 @@ open_firewall() {
     fi
 }
 
-# ---------- Ссылка ----------
 get_proxy_link() {
     PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${SECRET}"
     success "Ссылка для подключения готова"
 }
 
-# ---------- Глобальная команда yurich ----------
 create_global_command() {
-    # Сначала сохраняем сам скрипт в /opt/mtproto-proxy/
     mkdir -p /opt/mtproto-proxy
-    cp "$0" /opt/mtproto-proxy/mtp.sh
-    chmod +x /opt/mtproto-proxy/mtp.sh
-
-    cat > /usr/local/bin/yurich << 'EOF'
+    cat > /opt/mtproto-proxy/mtp.sh << 'EOF'
 #!/bin/bash
 if [[ "$EUID" -ne 0 ]]; then
-    echo -e "\033[0;31mПожалуйста, запустите с sudo: sudo yurich\033[0m"
+    echo -e "\033[0;31mЗапустите с sudo: sudo yurich\033[0m"
     exit 1
 fi
-exec bash /opt/mtproto-proxy/mtp.sh --menu
+while true; do
+    clear
+    echo -e "\033[0;36m=== Управление прокси Telemt ===\033[0m"
+    echo "1) Посмотреть логи"
+    echo "2) Перезапустить прокси"
+    echo "3) Остановить прокси"
+    echo "4) Запустить прокси"
+    echo "5) Статус прокси"
+    echo "6) Статистика (netstat)"
+    echo "7) Показать ссылку"
+    echo "0) Выход"
+    read -p "Выберите действие: " choice
+    case $choice in
+        1) journalctl -u telemt -f ;;
+        2) systemctl restart telemt ;;
+        3) systemctl stop telemt ;;
+        4) systemctl start telemt ;;
+        5) systemctl status telemt --no-pager ;;
+        6) ss -tlnp | grep telemt ;;
+        7)
+            SECRET=$(grep '^secret' /etc/telemt/config.toml | cut -d'"' -f2)
+            PORT=$(grep '^bind' /etc/telemt/config.toml | grep -oP ':\K[0-9]+')
+            IP=$(curl -s -4 ifconfig.me)
+            echo -e "\033[0;32mСсылка: tg://proxy?server=${IP}&port=${PORT}&secret=${SECRET}\033[0m"
+            read -p "Нажмите Enter..."
+            ;;
+        0) exit 0 ;;
+        *) echo "Неверный выбор" ;;
+    esac
+done
+EOF
+    chmod +x /opt/mtproto-proxy/mtp.sh
+    cat > /usr/local/bin/yurich << 'EOF'
+#!/bin/bash
+exec bash /opt/mtproto-proxy/mtp.sh
 EOF
     chmod +x /usr/local/bin/yurich
-    success "Глобальная команда 'yurich' создана (запускайте: sudo yurich)"
+    success "Глобальная команда 'yurich' создана"
 }
 
-# ---------- Меню управления ----------
-show_menu() {
-    while true; do
-        clear
-        banner
-        echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}║                    📋 МЕНЮ УПРАВЛЕНИЯ                      ║${NC}"
-        echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Посмотреть логи Telemt${NC}"
-        echo -e "   ${CYAN}2${NC} ─ ${YELLOW}🔄 Перезапустить прокси${NC}"
-        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}🛑 Остановить прокси${NC}"
-        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}▶️  Запустить прокси${NC}"
-        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}ℹ️  Статус прокси${NC}"
-        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}🌐 Показать статистику подключений${NC}"
-        echo -e "   ${CYAN}7${NC} ─ ${YELLOW}🔗 Показать ссылку для подключения${NC}"
-        echo -e "   ${CYAN}0${NC} ─ ${RED}🚪 Выход${NC}"
-        echo ""
-        echo -ne "${BOLD}Выберите пункт меню (0-7): ${NC}"
-        read choice
-        case $choice in
-            1)
-                echo -e "${BLUE}Логи Telemt (Ctrl+C для выхода):${NC}"
-                journalctl -u telemt -f
-                ;;
-            2)
-                systemctl restart telemt
-                success "Прокси перезапущен"
-                sleep 1
-                ;;
-            3)
-                systemctl stop telemt
-                success "Прокси остановлен"
-                sleep 1
-                ;;
-            4)
-                systemctl start telemt
-                success "Прокси запущен"
-                sleep 1
-                ;;
-            5)
-                systemctl status telemt --no-pager
-                echo ""
-                echo -e "${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-                read
-                ;;
-            6)
-                echo -e "${BLUE}Активные соединения:${NC}"
-                ss -tlnp | grep telemt || echo "Нет активных соединений"
-                echo ""
-                echo -e "${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-                read
-                ;;
-            7)
-                if [[ -f /etc/telemt/config.toml ]]; then
-                    SECRET=$(grep '^secret' /etc/telemt/config.toml | cut -d'"' -f2)
-                    PORT=$(grep '^bind' /etc/telemt/config.toml | grep -oP ':\K[0-9]+')
-                    IP=$(curl -s -4 ifconfig.me)
-                    echo -e "${GREEN}Ваша ссылка:${NC} tg://proxy?server=${IP}&port=${PORT}&secret=${SECRET}"
-                else
-                    warn "Файл конфигурации не найден"
-                fi
-                echo ""
-                echo -e "${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-                read
-                ;;
-            0)
-                clear
-                echo -e "${GREEN}До свидания!${NC}"
-                exit 0
-                ;;
-            *)
-                echo -e "${RED}Неверный выбор${NC}"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-# ---------- Финальный вывод установки ----------
 print_result() {
     clear
     banner
@@ -369,10 +308,6 @@ print_result() {
     echo -e "${GREEN}💡 Теперь вы можете управлять прокси командой:${NC}"
     echo -e "   ${YELLOW}sudo yurich${NC}"
     echo ""
-    show_github_link
-}
-
-show_github_link() {
     echo -e "${YELLOW}${BLINK}══════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}${BLINK}   ⭐ Если скрипт был полезен, поставь звезду на GitHub!   ${NC}"
     echo -e "${YELLOW}${BLINK}   👉 https://github.com/Pykucyka/yurichdelaetMTPoto-proxy${NC}"
@@ -380,33 +315,20 @@ show_github_link() {
     echo ""
 }
 
-# ---------- Установка (основной процесс) ----------
-install_proxy() {
+main() {
     banner
     check_root
+    install_rust
+    build_telemt
     get_params
-    install_telemt_binary
-    create_telemt_config
-    enable_telemt_service
+    generate_secret
+    create_config
+    create_systemd_service
     get_server_addr
     open_firewall
     get_proxy_link
     create_global_command
     print_result
-}
-
-# ---------- Точка входа ----------
-main() {
-    if [[ "${1:-}" == "--menu" ]]; then
-        # Проверяем, установлен ли telemt
-        if ! command -v telemt &> /dev/null; then
-            echo -e "${RED}❌ Прокси не установлен. Сначала запустите установку: sudo ./mtp.sh${NC}"
-            exit 1
-        fi
-        show_menu
-    else
-        install_proxy
-    fi
 }
 
 main "$@"
