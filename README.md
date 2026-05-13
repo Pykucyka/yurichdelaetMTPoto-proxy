@@ -34,7 +34,7 @@
 Выполните на сервере от **root**:
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/yurichdelaet/mtproto-proxy/main/mtp.sh)
+bash <(curl -s https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh)
 Если curl не установлен:
 
 bash
