@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 4.1 (fixed update & live stats)
+# Version: 4.2 (fixed stats output, no browser)
 # =============================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v4.1${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v4.2${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Global command: yurich | TUI Menu${CYAN}              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -122,11 +122,10 @@ get_params() {
             error "Домен не может быть пустым"
         fi
         SERVER_ADDR="$CUSTOM_DOMAIN"
-        # Проверка DNS (предупреждение, если не указывает на этот сервер)
         CURRENT_IP=$(curl -s -4 ifconfig.me)
         DOMAIN_IP=$(dig +short "$CUSTOM_DOMAIN" | head -1)
         if [[ -n "$DOMAIN_IP" && "$DOMAIN_IP" != "$CURRENT_IP" ]]; then
-            warn "Домен $CUSTOM_DOMAIN не指向 текущий IP ($CURRENT_IP). Подключение может не работать!"
+            warn "Домен $CUSTOM_DOMAIN не указывает на текущий IP ($CURRENT_IP). Подключение может не работать!"
         elif [[ -z "$DOMAIN_IP" ]]; then
             warn "Не удалось определить IP домена $CUSTOM_DOMAIN. Убедитесь, что DNS запись существует."
         else
@@ -253,7 +252,16 @@ live_stats() {
         CONNS=$(docker exec mtproxy ss -tun 2>/dev/null | tail -n +2 | wc -l || echo "0")
         echo -e "   ➤ Активных TCP-соединений: ${GREEN}${CONNS}${NC}"
         echo ""
-        echo -e "${YELLOW}📡 Веб-интерфейс статистики:${NC}"
+        echo -e "${YELLOW}⏱️  Uptime контейнера:${NC}"
+        UPTIME=$(docker inspect --format='{{.State.StartedAt}}' mtproxy | xargs -I {} date -d {} +%s)
+        NOW=$(date +%s)
+        DIFF=$((NOW - UPTIME))
+        DAYS=$((DIFF / 86400))
+        HOURS=$(( (DIFF % 86400) / 3600 ))
+        MINS=$(( (DIFF % 3600) / 60 ))
+        echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
+        echo ""
+        echo -e "${YELLOW}📡 Веб-интерфейс (для браузера):${NC}"
         echo -e "   ➤ http://${SERVER}:8080"
         echo ""
         echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
@@ -289,7 +297,16 @@ show_stats() {
     CONNS=$(docker exec mtproxy ss -tun 2>/dev/null | tail -n +2 | wc -l || echo "0")
     echo -e "   ➤ Активных TCP-соединений: ${GREEN}${CONNS}${NC}"
     echo ""
-    echo -e "${YELLOW}📡 Веб-интерфейс статистики:${NC}"
+    echo -e "${YELLOW}⏱️  Uptime контейнера:${NC}"
+    UPTIME=$(docker inspect --format='{{.State.StartedAt}}' mtproxy | xargs -I {} date -d {} +%s)
+    NOW=$(date +%s)
+    DIFF=$((NOW - UPTIME))
+    DAYS=$((DIFF / 86400))
+    HOURS=$(( (DIFF % 86400) / 3600 ))
+    MINS=$(( (DIFF % 3600) / 60 ))
+    echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
+    echo ""
+    echo -e "${YELLOW}📡 Веб-интерфейс (для браузера):${NC}"
     echo -e "   ➤ http://${SERVER}:8080"
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
@@ -406,7 +423,6 @@ change_domain() {
     echo -e "Текущий адрес: ${YELLOW}${SERVER}${NC}"
     read -p "Введите новый домен или IP (оставьте пустым для автоопределения IP): " NEW_ADDR
     if [[ -n "$NEW_ADDR" ]]; then
-        # Проверка DNS если введён домен
         if [[ "$NEW_ADDR" =~ [a-zA-Z] ]]; then
             CURRENT_IP=$(curl -s -4 ifconfig.me)
             DOMAIN_IP=$(dig +short "$NEW_ADDR" | head -1)
@@ -421,7 +437,6 @@ change_domain() {
         SERVER="$NEW_ADDR"
         success "Адрес изменён на: $SERVER"
     else
-        # автоопределение IP
         NEW_IP=$(curl -s -4 ifconfig.me)
         if [[ -n "$NEW_IP" ]]; then
             SERVER="$NEW_IP"
@@ -430,13 +445,13 @@ change_domain() {
             warn "Не удалось определить IP автоматически, оставлен старый: $SERVER"
         fi
     fi
+    echo "$SERVER" > /opt/mtproto-proxy/current_addr
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
 }
 
 auto_update_check() {
-    # Проверяем наличие новой версии скрипта (по версии в заголовке)
-    SCRIPT_VERSION="4.1"
+    SCRIPT_VERSION="4.2"
     REMOTE_VERSION=$(curl -s https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh | grep -E '^# Version: ' | head -1 | awk '{print $3}')
     if [[ -n "$REMOTE_VERSION" && "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]]; then
         echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
@@ -450,12 +465,10 @@ auto_update_check() {
 }
 
 show_menu() {
-    # Получаем текущий адрес (домен или IP)
     SERVER=$(cat /opt/mtproto-proxy/current_addr 2>/dev/null || echo "")
     if [[ -z "$SERVER" ]]; then
         SERVER=$(curl -s -4 ifconfig.me || echo "unknown")
     fi
-    # Проверка обновлений при входе в меню
     auto_update_check
     while true; do
         clear
@@ -509,10 +522,8 @@ install_proxy() {
     get_public_ip
     open_firewall
     get_proxy_link
-    # Сохраняем адрес для меню
     mkdir -p /opt/mtproto-proxy
     echo "$SERVER" > /opt/mtproto-proxy/current_addr
-    # Сохраняем сам скрипт
     SCRIPT_SOURCE="${BASH_SOURCE[0]}"
     if [[ "$SCRIPT_SOURCE" == "/dev/fd/"* ]] || [[ ! -f "$SCRIPT_SOURCE" ]]; then
         curl -s -o /opt/mtproto-proxy/mtp.sh "https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh"
