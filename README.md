@@ -3,7 +3,7 @@
 **Профессиональный скрипт для развёртывания MTProto прокси на VPS за 2 минуты.**  
 Поддерживает маскировку под HTTPS (Fake TLS), автоматическую установку Docker, открытие портов, а также **интерактивное меню управления** с выводом статистики, логов и возможностью обновления.
 
-👉 **Репозиторий:** [github.com/yurichdelaet/mtproto-proxy](https://github.com/yurichdelaet/mtproto-proxy)
+👉 **Репозиторий:** [[github.com/yurichdelaet/mtproto-proxy](https://github.com/Pykucyka/yurichdelaetMTPoto-proxy)](https://github.com/yurichdelaet/mtproto-proxy)
 
 ---
 
