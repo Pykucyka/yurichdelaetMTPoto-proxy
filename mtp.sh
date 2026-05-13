@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 4.2 (fixed stats output, no browser)
+# Version: 4.3 (removed live stats, fixed regular stats)
 # =============================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v4.2${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v4.3${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Global command: yurich | TUI Menu${CYAN}              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -234,54 +234,11 @@ EOF
     success "Глобальная команда 'yurich' создана (запускайте: sudo yurich)"
 }
 
-# Функция живой статистики (обновление каждые 2 секунды)
-live_stats() {
-    clear
-    banner
-    echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ В РЕАЛЬНОМ ВРЕМЕНИ (q - выход)${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    while true; do
-        if ! docker ps | grep -q mtproxy; then
-            echo -e "${RED}❌ Контейнер mtproxy не запущен!${NC}"
-            break
-        fi
-        echo -e "${YELLOW}📈 Использование ресурсов (CPU / RAM / NET):${NC}"
-        docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" | grep -E "mtproxy|CONTAINER" | sed 's/^/   /'
-        echo ""
-        echo -e "${YELLOW}🌐 Сетевые подключения:${NC}"
-        CONNS=$(docker exec mtproxy ss -tun 2>/dev/null | tail -n +2 | wc -l || echo "0")
-        echo -e "   ➤ Активных TCP-соединений: ${GREEN}${CONNS}${NC}"
-        echo ""
-        echo -e "${YELLOW}⏱️  Uptime контейнера:${NC}"
-        UPTIME=$(docker inspect --format='{{.State.StartedAt}}' mtproxy | xargs -I {} date -d {} +%s)
-        NOW=$(date +%s)
-        DIFF=$((NOW - UPTIME))
-        DAYS=$((DIFF / 86400))
-        HOURS=$(( (DIFF % 86400) / 3600 ))
-        MINS=$(( (DIFF % 3600) / 60 ))
-        echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
-        echo ""
-        echo -e "${YELLOW}📡 Веб-интерфейс (для браузера):${NC}"
-        echo -e "   ➤ http://${SERVER}:8080"
-        echo ""
-        echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-        echo -e "${BOLD}Нажмите 'q' и Enter для выхода из режима статистики...${NC}"
-        read -t 2 -n 1 key
-        if [[ "$key" == "q" ]]; then
-            break
-        fi
-        clear
-        banner
-        echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ В РЕАЛЬНОМ ВРЕМЕНИ (q - выход)${NC}"
-        echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    done
-}
-
-# Обычный вывод статистики (разовый)
+# Функция обычной статистики (разовая)
 show_stats() {
     clear
     banner
-    echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ (РАЗОВАЯ)${NC}"
+    echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
     if ! docker ps | grep -q mtproxy; then
         echo -e "${RED}❌ Контейнер mtproxy не запущен!${NC}"
@@ -298,15 +255,19 @@ show_stats() {
     echo -e "   ➤ Активных TCP-соединений: ${GREEN}${CONNS}${NC}"
     echo ""
     echo -e "${YELLOW}⏱️  Uptime контейнера:${NC}"
-    UPTIME=$(docker inspect --format='{{.State.StartedAt}}' mtproxy | xargs -I {} date -d {} +%s)
-    NOW=$(date +%s)
-    DIFF=$((NOW - UPTIME))
-    DAYS=$((DIFF / 86400))
-    HOURS=$(( (DIFF % 86400) / 3600 ))
-    MINS=$(( (DIFF % 3600) / 60 ))
-    echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
+    UPTIME=$(docker inspect --format='{{.State.StartedAt}}' mtproxy | xargs -I {} date -d {} +%s 2>/dev/null || echo "0")
+    if [[ "$UPTIME" != "0" ]]; then
+        NOW=$(date +%s)
+        DIFF=$((NOW - UPTIME))
+        DAYS=$((DIFF / 86400))
+        HOURS=$(( (DIFF % 86400) / 3600 ))
+        MINS=$(( (DIFF % 3600) / 60 ))
+        echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
+    else
+        echo -e "   ➤ Не удалось определить"
+    fi
     echo ""
-    echo -e "${YELLOW}📡 Веб-интерфейс (для браузера):${NC}"
+    echo -e "${YELLOW}📡 Веб-интерфейс (статистика в браузере):${NC}"
     echo -e "   ➤ http://${SERVER}:8080"
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
@@ -451,7 +412,7 @@ change_domain() {
 }
 
 auto_update_check() {
-    SCRIPT_VERSION="4.2"
+    SCRIPT_VERSION="4.3"
     REMOTE_VERSION=$(curl -s https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh | grep -E '^# Version: ' | head -1 | awk '{print $3}')
     if [[ -n "$REMOTE_VERSION" && "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]]; then
         echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
@@ -477,27 +438,25 @@ show_menu() {
         echo -e "${GREEN}║                    📋 МЕНЮ УПРАВЛЕНИЯ                      ║${NC}"
         echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
-        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика прокси (разовая)${NC}"
-        echo -e "   ${CYAN}2${NC} ─ ${YELLOW}📈 Статистика в реальном времени (обновление каждые 2с)${NC}"
-        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}ℹ️  Информация о прокси (секрет, ссылка)${NC}"
-        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🌐 Изменить домен/IP для подключения${NC}"
-        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}🔄 Обновить скрипт до актуальной версии${NC}"
-        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}🔁 Переустановить прокси (сохраняя секрет)${NC}"
-        echo -e "   ${CYAN}7${NC} ─ ${YELLOW}📜 Просмотр последних логов${NC}"
-        echo -e "   ${CYAN}8${NC} ─ ${YELLOW}♻️  Перезапустить прокси-контейнер${NC}"
+        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика прокси (нагрузка, подключения)${NC}"
+        echo -e "   ${CYAN}2${NC} ─ ${YELLOW}ℹ️  Информация о прокси (секрет, ссылка)${NC}"
+        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}🌐 Изменить домен/IP для подключения${NC}"
+        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🔄 Обновить скрипт до актуальной версии${NC}"
+        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}🔁 Переустановить прокси (сохраняя секрет)${NC}"
+        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}📜 Просмотр последних логов${NC}"
+        echo -e "   ${CYAN}7${NC} ─ ${YELLOW}♻️  Перезапустить прокси-контейнер${NC}"
         echo -e "   ${CYAN}0${NC} ─ ${RED}🚪 Выход (вернуться в командную строку)${NC}"
         echo ""
-        echo -ne "${BOLD}Выберите пункт меню (0-8): ${NC}"
+        echo -ne "${BOLD}Выберите пункт меню (0-7): ${NC}"
         read choice
         case $choice in
             1) show_stats ;;
-            2) live_stats ;;
-            3) show_info ;;
-            4) change_domain ;;
-            5) update_script ;;
-            6) reinstall_proxy ;;
-            7) view_logs ;;
-            8) restart_proxy ;;
+            2) show_info ;;
+            3) change_domain ;;
+            4) update_script ;;
+            5) reinstall_proxy ;;
+            6) view_logs ;;
+            7) restart_proxy ;;
             0)
                 clear
                 echo -e "${GREEN}До свидания! Для повторного входа выполните: sudo yurich${NC}"
