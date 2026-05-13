@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/yurichdelaet/mtproto-proxy
 # License: MIT
-# Version: 3.2 (исправлен образ, добавлен глобальный вызов yurich)
+# Version: 3.3 (fixed global command)
 # =============================================
 
 set -euo pipefail
@@ -57,13 +57,12 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v3.2${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v3.3${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Global command: yurich | TUI Menu${CYAN}              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
-# Вспомогательные функции
 step() { echo -e "${BLUE}[➜]${NC} $1"; }
 success() { echo -e "${GREEN}[✓]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
@@ -182,17 +181,15 @@ get_proxy_link() {
 }
 
 create_global_command() {
-    # Создаём глобальную команду yurich
     cat > /usr/local/bin/yurich << 'EOF'
 #!/bin/bash
 if [[ "$EUID" -ne 0 ]]; then
     echo -e "\033[0;31mПожалуйста, запустите с sudo: sudo yurich\033[0m"
     exit 1
 fi
-# Путь к установленному скрипту (определяется при установке)
 SCRIPT_PATH="/opt/mtproto-proxy/mtp.sh"
 if [[ -f "$SCRIPT_PATH" ]]; then
-    exec "$SCRIPT_PATH" --menu
+    exec bash "$SCRIPT_PATH" --menu
 else
     echo -e "\033[0;31mСкрипт управления не найден. Переустановите прокси.\033[0m"
     exit 1
@@ -234,14 +231,11 @@ show_info() {
     banner
     echo -e "${GREEN}ℹ️  ИНФОРМАЦИЯ О ПРОКСИ${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    # Получаем текущий порт из контейнера
     PROXY_PORT=$(docker inspect mtproxy 2>/dev/null | grep -oP '"HostPort":\s*"\K[^"]+' | head -1 || echo "8443")
-    # Получаем секрет из переменной окружения контейнера
     FULL_SECRET=$(docker exec mtproxy env 2>/dev/null | grep '^SECRET=' | cut -d= -f2)
     if [[ -z "$FULL_SECRET" ]]; then
         FULL_SECRET="(не удалось получить)"
     fi
-    # Получаем домен из секрета (последние символы в hex -> текст)
     if [[ ${#FULL_SECRET} -gt 6 ]]; then
         DOMAIN_HEX=$(echo "$FULL_SECRET" | sed 's/^ee[0-9a-f]\{32\}//')
         DOMAIN=$(echo -n "$DOMAIN_HEX" | xxd -p -r 2>/dev/null || echo "cloudflare.com")
@@ -292,7 +286,6 @@ reinstall_proxy() {
     if [[ -n "$OLD_SECRET" ]]; then
         echo -e "Используем существующий секрет."
         FULL_SECRET="$OLD_SECRET"
-        # Извлечём порт
         PROXY_PORT=$(docker inspect mtproxy | grep -oP '"HostPort":\s*"\K[^"]+' | head -1)
     else
         echo -e "Генерация нового секрета..."
@@ -338,7 +331,6 @@ restart_proxy() {
 }
 
 show_menu() {
-    # Получаем IP для статистики
     IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || echo "unknown")
     while true; do
         clear
@@ -377,7 +369,6 @@ show_menu() {
     done
 }
 
-# Основная установка
 install_proxy() {
     banner
     check_root
@@ -389,7 +380,6 @@ install_proxy() {
     get_public_ip
     open_firewall
     get_proxy_link
-    # Копируем скрипт в /opt для глобальной команды
     mkdir -p /opt/mtproto-proxy
     cp "$0" /opt/mtproto-proxy/mtp.sh
     chmod +x /opt/mtproto-proxy/mtp.sh
@@ -437,7 +427,6 @@ show_github_link() {
     echo ""
 }
 
-# Точка входа
 main() {
     if [[ "${1:-}" == "--menu" ]]; then
         if ! docker ps -a &>/dev/null || ! docker inspect mtproxy &>/dev/null; then
