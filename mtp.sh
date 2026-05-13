@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.1 (official telemt binary + traefik)
+# Version: 7.1 (binary telemt + docker traefik)
 # ============================================================
 
 set -euo pipefail
