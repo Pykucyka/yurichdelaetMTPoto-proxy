@@ -21,7 +21,7 @@ BOLD='\033[1m'
 BLINK='\033[5m'
 NC='\033[0m'
 
-# Спиннер для длительных операций
+# Спиннер
 spinner() {
     local pid=$1
     local delay=0.1
@@ -36,7 +36,7 @@ spinner() {
     printf "    \b\b\b\b"
 }
 
-# КРАСИВЫЙ БАННЕР: YURICH + DELAET (крупно, две секции)
+# Баннер
 banner() {
     clear
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -56,7 +56,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v2.0${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v2.1${CYAN}                                ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -74,7 +74,7 @@ check_root() {
     fi
 }
 
-# Установка Docker с реальным прогрессом
+# Установка Docker
 install_docker() {
     if ! command -v docker &> /dev/null; then
         step "Docker не найден. Скачиваем установщик..."
@@ -97,7 +97,7 @@ install_docker() {
     fi
 }
 
-# Загрузка Docker-образа с прогрессом
+# Загрузка Docker-образа
 pull_docker_image() {
     step "Загружаем Docker-образ ellermister/mtproxy (может занять некоторое время)..."
     docker pull ellermister/mtproxy
@@ -118,21 +118,23 @@ get_params() {
     success "Порт: $PROXY_PORT, домен: $DOMAIN"
 }
 
-# Генерация секрета (быстро, но для красоты покажем спиннер)
+# Генерация секретов (короткий 32 символа и полный Fake TLS)
 generate_secret() {
     step "Генерация секрета Fake TLS..."
     (
         sleep 0.5
         SECRET_PREFIX="ee"
-        RANDOM_KEY=$(openssl rand -hex 16)
+        RANDOM_KEY=$(openssl rand -hex 16)          # 32 символа для бота
         DOMAIN_HEX=$(echo -n "$DOMAIN" | xxd -ps)
         FULL_SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
-        echo "$FULL_SECRET" > /tmp/mtproxy_secret
+        echo "$RANDOM_KEY" > /tmp/mtproxy_short_secret
+        echo "$FULL_SECRET" > /tmp/mtproxy_full_secret
     ) &
     spinner $!
-    FULL_SECRET=$(cat /tmp/mtproxy_secret)
-    rm -f /tmp/mtproxy_secret
-    success "Секрет создан"
+    SHORT_SECRET=$(cat /tmp/mtproxy_short_secret)
+    FULL_SECRET=$(cat /tmp/mtproxy_full_secret)
+    rm -f /tmp/mtproxy_short_secret /tmp/mtproxy_full_secret
+    success "Секрет создан (короткий: 32 символа)"
 }
 
 # Запуск контейнера
@@ -179,7 +181,7 @@ open_firewall() {
     fi
 }
 
-# Получение ссылки с анимацией
+# Получение ссылки
 get_proxy_link() {
     step "Ожидаем генерации ссылки прокси..."
     (
@@ -222,7 +224,8 @@ print_result() {
     echo -e "   • IP:      ${CYAN}${IP}${NC}"
     echo -e "   • Порт:    ${CYAN}${PROXY_PORT}${NC}"
     echo -e "   • Домен:   ${CYAN}${DOMAIN}${NC}"
-    echo -e "   • Секрет:  ${YELLOW}${FULL_SECRET}${NC}"
+    echo -e "   • Секрет для @MTProxybot (32 символа): ${YELLOW}${SHORT_SECRET}${NC}"
+    echo -e "   • Полный секрет (для опытных): ${CYAN}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${BOLD}🔗 Готовая ссылка (нажми на неё в Telegram):${NC}"
     echo -e "   ${MAGENTA}${PROXY_LINK}${NC}"
@@ -231,7 +234,8 @@ print_result() {
     echo -e "   1. Открой ${CYAN}@MTProxybot${NC}"
     echo -e "   2. Отправь /newproxy"
     echo -e "   3. Введи ${CYAN}${IP}${NC} и порт ${CYAN}${PROXY_PORT}${NC}"
-    echo -e "   4. Вставь секрет: ${YELLOW}${FULL_SECRET}${NC}"
+    echo -e "   4. Вставь короткий секрет (32 символа): ${YELLOW}${SHORT_SECRET}${NC}"
+    echo -e "   5. Бот выдаст TAG — сохрани его (необязательно)."
     echo ""
     echo -e "${BOLD}🛠 Управление прокси:${NC}"
     echo -e "   • Логи:       ${YELLOW}docker logs -f mtproxy${NC}"
