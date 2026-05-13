@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# MTProto Proxy Installer with Fake TLS + Traefik
+# MTProto Proxy Installer with Telemt + Traefik (Fake TLS)
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.0 (Telemt + Traefik, single port 443)
+# Version: 7.0 (stable Telemt + Traefik, fake TLS on 443)
 # ============================================================
 
 set -euo pipefail
@@ -58,7 +58,7 @@ banner() {
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
     echo -e "${CYAN}║${NC}                         ${GREEN}v7.0${CYAN}                                ║${NC}"
-    echo -e "${CYAN}║${NC}              ${WHITE}Telemt + Traefik | Single Port 443${CYAN}            ║${NC}"
+    echo -e "${CYAN}║${NC}              ${WHITE}Telemt + Traefik | Fake TLS on 443${CYAN}            ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -77,44 +77,40 @@ check_root() {
 install_docker() {
     if ! command -v docker &> /dev/null; then
         step "Docker не найден. Скачиваем установщик..."
-        curl -s --fail -o get-docker.sh https://get.docker.com || error "Не удалось скачать установщик Docker"
-        echo -e "${GREEN}✓ Установщик загружен${NC}"
-        step "Устанавливаем Docker (это может занять минуту)..."
-        bash get-docker.sh > docker_install.log 2>&1 &
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sh get-docker.sh > /dev/null 2>&1 &
         spinner $!
-        if [[ $? -eq 0 ]]; then
-            rm -f get-docker.sh docker_install.log
-            systemctl enable docker > /dev/null 2>&1
-            systemctl start docker > /dev/null 2>&1
-            success "Docker установлен"
-        else
-            error "Ошибка установки Docker. Логи: cat docker_install.log"
-        fi
+        systemctl enable docker > /dev/null 2>&1
+        systemctl start docker > /dev/null 2>&1
+        rm -f get-docker.sh
+        success "Docker установлен"
     else
         success "Docker уже установлен"
     fi
-}
 
-install_docker_compose() {
     if ! command -v docker-compose &> /dev/null; then
-        step "Устанавливаем Docker Compose..."
+        step "Устанавливаем docker-compose..."
         curl -sL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         chmod +x /usr/local/bin/docker-compose
-        success "Docker Compose установлен"
+        success "docker-compose установлен"
     else
-        success "Docker Compose уже установлен"
+        success "docker-compose уже установлен"
     fi
 }
 
 get_params() {
     echo ""
-    step "Настройка прокси (Telemt + Traefik)"
-    echo -e "${YELLOW}Все подключения будут на порту 443 (единственный).${NC}"
-    
+    step "Настройка прокси"
+    read -p "Введите порт для Traefik (внешний) [443]: " PROXY_PORT
+    PROXY_PORT=${PROXY_PORT:-443}
+    if ! [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || [ "$PROXY_PORT" -lt 1 ] || [ "$PROXY_PORT" -gt 65535 ]; then
+        error "Неверный порт"
+    fi
+
     echo ""
     echo -e "${YELLOW}Выберите тип адреса для подключения:${NC}"
     echo "   1) IP-адрес (автоопределение)"
-    echo "   2) Домен (введите вручную, должен указывать на этот сервер)"
+    echo "   2) Домен (введите вручную)"
     read -p "Ваш выбор (1 или 2): " ADDR_TYPE
     if [[ "$ADDR_TYPE" == "2" ]]; then
         read -p "Введите ваш домен (например: proxy.example.com): " CUSTOM_DOMAIN
@@ -131,123 +127,137 @@ get_params() {
         else
             success "Домен $CUSTOM_DOMAIN -> $DOMAIN_IP (OK)"
         fi
-        success "Будет использован домен: $CUSTOM_DOMAIN"
     else
         SERVER_ADDR=""
-        success "Будет использован IP-адрес сервера"
     fi
 
-    read -p "Домен маскировки (Fake TLS, например 1c.ru или sberbank.ru) [1c.ru]: " MASK_DOMAIN
-    MASK_DOMAIN=${MASK_DOMAIN:-1c.ru}
-    success "Домен маскировки: $MASK_DOMAIN"
+    read -p "Домен маскировки (Fake TLS) [1c.ru]: " FAKE_DOMAIN
+    FAKE_DOMAIN=${FAKE_DOMAIN:-1c.ru}
+    success "Порт: $PROXY_PORT, домен маскировки: $FAKE_DOMAIN"
 }
 
 generate_secret() {
-    step "Генерация 32-символьного секрета (hex)..."
-    SECRET=$(openssl rand -hex 16)
-    success "Секрет: $SECRET"
+    step "Генерация Fake TLS секрета..."
+    SECRET_PREFIX="ee"
+    RANDOM_KEY=$(openssl rand -hex 16)
+    DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
+    FULL_SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
+    success "Секрет создан"
 }
 
-setup_files() {
-    step "Создаём структуру каталогов и конфигурационные файлы..."
-    
-    INSTALL_DIR="/opt/mtproto-proxy"
-    mkdir -p "$INSTALL_DIR"/{traefik/static,traefik/dynamic}
+setup_directories() {
+    INSTALL_DIR="/opt/mtproto-telemt"
+    mkdir -p "$INSTALL_DIR"/{traefik/dynamic,traefik/static,data}
     cd "$INSTALL_DIR"
-    
-    # docker-compose.yml
-    cat > docker-compose.yml << 'EOF'
-services:
-  traefik:
-    image: traefik:v3.2
-    container_name: traefik
-    restart: unless-stopped
-    network_mode: host
-    command:
-      - "--configFile=/traefik.yml"
-    volumes:
-      - ./traefik/static/traefik.yml:/traefik.yml:ro
-      - ./traefik/dynamic/tcp.yml:/dynamic/tcp.yml:ro
-    logging:
-      options:
-        max-size: "10m"
+    success "Директория установки: $INSTALL_DIR"
+}
 
-  telemt:
-    image: whn0thacked/telemt-docker:latest
-    container_name: mtproxy-telemt
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - ./telemt.toml:/app/telemt.toml:ro
-    environment:
-      - RUST_LOG=info
-    logging:
-      options:
-        max-size: "10m"
+create_telemt_config() {
+    cat > "$INSTALL_DIR/telemt.toml" << EOF
+# Telemt configuration for Fake TLS
+secret = "$FULL_SECRET"
+bind = "0.0.0.0:1234"
+users = []
+timeout = 300
+keepalive = 30
+fast_mode = true
+ipv6 = false
+trace = false
+
+[censorship]
+tls_domain = "$FAKE_DOMAIN"
 EOF
+    success "Конфиг telemt.toml создан"
+}
 
-    # traefik/static/traefik.yml
-    cat > traefik/static/traefik.yml << 'EOF'
+create_traefik_static() {
+    cat > "$INSTALL_DIR/traefik/static/traefik.yml" << EOF
 global:
   sendAnonymousUsage: false
 
-log:
-  level: INFO
-
 entryPoints:
-  https:
-    address: ":443"
+  websecure:
+    address: ":${PROXY_PORT}"
 
 providers:
   file:
-    filename: /dynamic/tcp.yml
+    directory: /etc/traefik/dynamic
     watch: true
-EOF
 
-    # traefik/dynamic/tcp.yml (будет заполнен с подстановкой маскирующего домена)
-    cat > traefik/dynamic/tcp.yml << 'EOF'
+log:
+  level: INFO
+EOF
+    success "Статический конфиг Traefik создан"
+}
+
+create_traefik_dynamic() {
+    cat > "$INSTALL_DIR/traefik/dynamic/tcp.yml" << EOF
 tcp:
   routers:
-    mtproto:
+    telemt-router:
       entryPoints:
-        - "https"
-      rule: "HostSNI(`__MASK_DOMAIN__`)"
-      service: telemt
+        - websecure
+      rule: "HostSNI(\`$FAKE_DOMAIN\`)"
+      service: telemt-service
       tls:
         passthrough: true
 
   services:
-    telemt:
+    telemt-service:
       loadBalancer:
         servers:
-          - address: "127.0.0.1:1234"
+          - address: "telemt:1234"
 EOF
-    sed -i "s/__MASK_DOMAIN__/${MASK_DOMAIN}/g" traefik/dynamic/tcp.yml
-
-    # telemt.toml (шаблон)
-    cat > telemt.toml << 'EOF'
-secret = "__SECRET__"
-[telemetry]
-  prometheus = "0.0.0.0:9090"
-[censorship]
-  tls_domain = "__MASK_DOMAIN__"
-  pad_interval = [10, 20]
-EOF
-    sed -i "s/__SECRET__/${SECRET}/g" telemt.toml
-    sed -i "s/__MASK_DOMAIN__/${MASK_DOMAIN}/g" telemt.toml
-
-    success "Конфигурационные файлы созданы в $INSTALL_DIR"
+    success "Динамический конфиг Traefik создан"
 }
 
-run_containers() {
-    step "Запускаем контейнеры через docker-compose..."
-    cd /opt/mtproto-proxy
+create_docker_compose() {
+    cat > "$INSTALL_DIR/docker-compose.yml" << EOF
+version: '3.8'
+
+services:
+  telemt:
+    image: wh0nthacked/telemt-docker:latest
+    container_name: telemt
+    restart: always
+    volumes:
+      - ./telemt.toml:/app/telemt.toml:ro
+    command: ["/app/telemt", "/app/telemt.toml"]
+    networks:
+      - proxy-net
+
+  traefik:
+    image: traefik:v3.2
+    container_name: traefik
+    restart: always
+    ports:
+      - "${PROXY_PORT}:${PROXY_PORT}"
+    volumes:
+      - ./traefik/static:/etc/traefik:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy-net
+    depends_on:
+      - telemt
+
+networks:
+  proxy-net:
+    driver: bridge
+EOF
+    success "docker-compose.yml создан"
+}
+
+start_containers() {
+    step "Запускаем контейнеры Telemt и Traefik..."
+    cd "$INSTALL_DIR"
     docker-compose up -d
+    sleep 3
     success "Контейнеры запущены"
 }
 
 get_public_ip() {
-    if [[ -n "${SERVER_ADDR:-}" ]]; then
+    if [[ -n "$SERVER_ADDR" ]]; then
         SERVER="$SERVER_ADDR"
         success "Используем домен: $SERVER"
     else
@@ -265,24 +275,21 @@ get_public_ip() {
 
 open_firewall() {
     if command -v ufw &> /dev/null; then
-        step "Открываем порт 443 в UFW..."
-        ufw allow 443/tcp > /dev/null 2>&1
-        success "Порт 443 открыт (UFW)"
+        step "Открываем порт $PROXY_PORT в UFW..."
+        ufw allow ${PROXY_PORT}/tcp > /dev/null 2>&1
+        success "Порт открыт (UFW)"
     elif command -v firewall-cmd &> /dev/null; then
-        step "Открываем порт 443 в firewalld..."
-        firewall-cmd --permanent --add-port=443/tcp > /dev/null 2>&1
+        step "Открываем порт $PROXY_PORT в firewalld..."
+        firewall-cmd --permanent --add-port=${PROXY_PORT}/tcp > /dev/null 2>&1
         firewall-cmd --reload > /dev/null 2>&1
-        success "Порт 443 открыт (firewalld)"
+        success "Порт открыт (firewalld)"
     else
-        warn "Firewall не обнаружен. Убедитесь, что порт 443 открыт вручную."
+        warn "Firewall не обнаружен. Убедитесь, что порт $PROXY_PORT открыт вручную."
     fi
 }
 
 get_proxy_link() {
-    # Формируем полный Fake TLS секрет для ссылки: ee + 32-символьный секрет + hex(домен маскировки)
-    DOMAIN_HEX=$(echo -n "$MASK_DOMAIN" | xxd -ps)
-    FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
-    PROXY_LINK="tg://proxy?server=${SERVER}&port=443&secret=${FULL_SECRET}"
+    PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${FULL_SECRET}"
     success "Ссылка для подключения готова"
 }
 
@@ -293,218 +300,34 @@ if [[ "$EUID" -ne 0 ]]; then
     echo -e "\033[0;31mПожалуйста, запустите с sudo: sudo yurich\033[0m"
     exit 1
 fi
-SCRIPT_PATH="/opt/mtproto-proxy/mtp.sh"
-if [[ -f "$SCRIPT_PATH" ]]; then
-    exec bash "$SCRIPT_PATH" --menu
-else
-    echo -e "\033[0;31mСкрипт управления не найден. Переустановите прокси.\033[0m"
-    exit 1
-fi
+INSTALL_DIR="/opt/mtproto-telemt"
+cd "$INSTALL_DIR"
+echo -e "\033[0;36m=== Управление прокси Telemt+Traefik ===\033[0m"
+echo "1) Посмотреть логи"
+echo "2) Перезапустить прокси"
+echo "3) Остановить прокси"
+echo "4) Показать статистику (docker stats)"
+echo "5) Изменить домен/IP (требуется перезапуск)"
+echo "0) Выход"
+read -p "Выберите действие: " choice
+case $choice in
+    1) docker-compose logs -f ;;
+    2) docker-compose restart ;;
+    3) docker-compose down ;;
+    4) docker stats telemt traefik ;;
+    5)
+        read -p "Введите новый домен или IP: " NEW_ADDR
+        if [[ -n "$NEW_ADDR" ]]; then
+            echo "$NEW_ADDR" > current_addr
+            echo -e "\033[0;32mАдрес обновлён. Перезапустите прокси.\033[0m"
+        fi
+        ;;
+    0) exit 0 ;;
+    *) echo "Неверный выбор" ;;
+esac
 EOF
     chmod +x /usr/local/bin/yurich
     success "Глобальная команда 'yurich' создана (запускайте: sudo yurich)"
-}
-
-# Функции меню (управление)
-show_stats() {
-    clear
-    banner
-    echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    cd /opt/mtproto-proxy
-    if ! docker ps | grep -q "traefik\|telemt"; then
-        echo -e "${RED}❌ Контейнеры не запущены!${NC}"
-        echo -e "Запустите: ${YELLOW}docker-compose up -d${NC} в /opt/mtproto-proxy"
-        echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-        read
-        return
-    fi
-    echo -e "${YELLOW}📈 Использование ресурсов (CPU / RAM):${NC}"
-    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}" | grep -E "traefik|telemt|CONTAINER" | sed 's/^/   /'
-    echo ""
-    echo -e "${YELLOW}🌐 Логи Telemt (последние строки):${NC}"
-    docker logs --tail=10 mtproxy-telemt 2>&1 | tail -10 | sed 's/^/   /'
-    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-    read
-}
-
-show_info() {
-    clear
-    banner
-    echo -e "${GREEN}ℹ️  ИНФОРМАЦИЯ О ПРОКСИ${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    cd /opt/mtproto-proxy
-    if [[ -f telemt.toml ]]; then
-        SECRET=$(grep '^secret' telemt.toml | cut -d'"' -f2)
-        MASK_DOMAIN=$(grep 'tls_domain' telemt.toml | cut -d'"' -f2)
-        DOMAIN_HEX=$(echo -n "$MASK_DOMAIN" | xxd -ps)
-        FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
-        echo -e "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}${SERVER}${NC}"
-        echo -e "   ${BOLD}Порт:${NC}                 ${YELLOW}443${NC}"
-        echo -e "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}${MASK_DOMAIN}${NC}"
-        echo -e "   ${BOLD}Fake TLS секрет (ПОЛНЫЙ):${NC}"
-        echo -e "   ${WHITE}${FULL_SECRET}${NC}"
-        echo ""
-        echo -e "${MAGENTA}🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ${NC}"
-        echo -e "   Telegram-ссылка: ${GREEN}tg://proxy?server=${SERVER}&port=443&secret=${FULL_SECRET}${NC}"
-    else
-        echo -e "${RED}Файл конфигурации не найден${NC}"
-    fi
-    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-    read
-}
-
-update_script() {
-    clear
-    banner
-    echo -e "${GREEN}🔄 ОБНОВЛЕНИЕ СКРИПТА${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    cd "$SCRIPT_DIR"
-    if [[ -d ".git" ]]; then
-        git pull origin main
-        echo -e "${GREEN}✅ Скрипт обновлён.${NC}"
-    else
-        cd /tmp
-        rm -rf yurichdelaetMTPoto-proxy 2>/dev/null || true
-        git clone https://github.com/Pykucyka/yurichdelaetMTPoto-proxy.git || error "Не удалось клонировать репозиторий"
-        cp yurichdelaetMTPoto-proxy/mtp.sh "$SCRIPT_DIR/mtp.sh"
-        chmod +x "$SCRIPT_DIR/mtp.sh"
-        rm -rf yurichdelaetMTPoto-proxy
-        echo -e "${GREEN}✅ Скрипт обновлён.${NC}"
-    fi
-    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-    read
-}
-
-reinstall_proxy() {
-    clear
-    banner
-    echo -e "${GREEN}🔄 ПЕРЕУСТАНОВКА ПРОКСИ${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    cd /opt/mtproto-proxy
-    docker-compose down
-    rm -rf /opt/mtproto-proxy
-    echo -e "Старые данные удалены. Запустите установку заново: ${YELLOW}./mtp.sh${NC}"
-    echo -e "\n${BOLD}Нажмите Enter, чтобы выйти...${NC}"
-    read
-    exit 0
-}
-
-view_logs() {
-    clear
-    banner
-    echo -e "${GREEN}📜 ПОСЛЕДНИЕ ЛОГИ КОНТЕЙНЕРОВ${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    cd /opt/mtproto-proxy
-    docker-compose logs --tail=50
-    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-    read
-}
-
-restart_proxy() {
-    clear
-    banner
-    echo -e "${GREEN}🔄 ПЕРЕЗАПУСК ПРОКСИ${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    cd /opt/mtproto-proxy
-    docker-compose restart
-    success "Контейнеры перезапущены"
-    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-    read
-}
-
-change_domain() {
-    clear
-    banner
-    echo -e "${GREEN}🌐 ИЗМЕНЕНИЕ ДОМЕНА/IP${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e "Текущий адрес: ${YELLOW}${SERVER}${NC}"
-    read -p "Введите новый домен или IP (оставьте пустым для автоопределения IP): " NEW_ADDR
-    if [[ -n "$NEW_ADDR" ]]; then
-        SERVER="$NEW_ADDR"
-        success "Адрес изменён на: $SERVER"
-        # Обновляем ссылку (пересоздаём её при следующем запросе информации)
-    else
-        NEW_IP=$(curl -s -4 ifconfig.me || echo "")
-        if [[ -n "$NEW_IP" ]]; then
-            SERVER="$NEW_IP"
-            success "IP обновлён автоматически: $SERVER"
-        else
-            warn "Не удалось определить IP автоматически, оставлен старый: $SERVER"
-        fi
-    fi
-    # Сохраняем новый адрес
-    echo "$SERVER" > /opt/mtproto-proxy/current_addr
-    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-    read
-}
-
-show_menu() {
-    SERVER=$(cat /opt/mtproto-proxy/current_addr 2>/dev/null || curl -s -4 ifconfig.me || echo "unknown")
-    while true; do
-        clear
-        banner
-        echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}║                    📋 МЕНЮ УПРАВЛЕНИЯ                      ║${NC}"
-        echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика прокси${NC}"
-        echo -e "   ${CYAN}2${NC} ─ ${YELLOW}ℹ️  Информация о прокси (секрет, ссылка)${NC}"
-        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}🌐 Изменить домен/IP для подключения${NC}"
-        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🔄 Обновить скрипт до актуальной версии${NC}"
-        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}🔁 Полная переустановка прокси (удалить всё)${NC}"
-        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}📜 Просмотр последних логов${NC}"
-        echo -e "   ${CYAN}7${NC} ─ ${YELLOW}♻️  Перезапустить прокси-контейнеры${NC}"
-        echo -e "   ${CYAN}0${NC} ─ ${RED}🚪 Выход (вернуться в командную строку)${NC}"
-        echo ""
-        echo -ne "${BOLD}Выберите пункт меню (0-7): ${NC}"
-        read choice
-        case $choice in
-            1) show_stats ;;
-            2) show_info ;;
-            3) change_domain ;;
-            4) update_script ;;
-            5) reinstall_proxy ;;
-            6) view_logs ;;
-            7) restart_proxy ;;
-            0)
-                clear
-                echo -e "${GREEN}До свидания! Для повторного входа выполните: sudo yurich${NC}"
-                exit 0
-                ;;
-            *) 
-                echo -e "${RED}Неверный выбор. Нажмите Enter...${NC}"
-                read
-                ;;
-        esac
-    done
-}
-
-install_proxy() {
-    banner
-    check_root
-    install_docker
-    install_docker_compose
-    get_params
-    generate_secret
-    setup_files
-    run_containers
-    get_public_ip
-    open_firewall
-    get_proxy_link
-    echo "$SERVER" > /opt/mtproto-proxy/current_addr
-    # Сохраняем скрипт в папку установки для глобальной команды
-    SCRIPT_SOURCE="${BASH_SOURCE[0]}"
-    if [[ "$SCRIPT_SOURCE" == "/dev/fd/"* ]] || [[ ! -f "$SCRIPT_SOURCE" ]]; then
-        curl -s --fail -o /opt/mtproto-proxy/mtp.sh "https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh" || error "Не удалось сохранить скрипт"
-        chmod +x /opt/mtproto-proxy/mtp.sh
-    else
-        cp "$SCRIPT_SOURCE" /opt/mtproto-proxy/mtp.sh
-        chmod +x /opt/mtproto-proxy/mtp.sh
-    fi
-    create_global_command
-    print_result
 }
 
 print_result() {
@@ -515,10 +338,9 @@ print_result() {
     echo -e "${CYAN}📡 ПАРАМЕТРЫ ПРОКСИ${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
     printf "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}%s${NC}\n" "$SERVER"
-    printf "   ${BOLD}Порт:${NC}                 ${YELLOW}%s${NC}\n" "443"
-    printf "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}%s${NC}\n" "$MASK_DOMAIN"
+    printf "   ${BOLD}Порт:${NC}                 ${YELLOW}%s${NC}\n" "$PROXY_PORT"
+    printf "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}%s${NC}\n" "$FAKE_DOMAIN"
     printf "   ${BOLD}Fake TLS секрет (ПОЛНЫЙ):${NC}\n"
-    FULL_SECRET="ee$(echo -n "$SECRET")$(echo -n "$MASK_DOMAIN" | xxd -ps)"
     echo -e "   ${WHITE}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${MAGENTA}🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ${NC}"
@@ -527,11 +349,11 @@ print_result() {
     echo ""
     echo -e "${YELLOW}📊 СТАТИСТИКА И ТЕЛЕМЕТРИЯ${NC}"
     echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
-    echo -e "   Для просмотра статистики используйте меню прокси: ${YELLOW}sudo yurich${NC}"
+    echo -e "   Для просмотра логов: ${WHITE}docker-compose logs -f${NC} (в $INSTALL_DIR)"
     echo ""
     echo -e "${BLUE}🤖 РЕГИСТРАЦИЯ В @MTProxybot${NC}"
     echo -e "${BLUE}────────────────────────────────────────────────────────${NC}"
-    echo -e "   Отправь боту /newproxy → введи ${CYAN}${SERVER}${NC} и порт ${CYAN}443${NC}"
+    echo -e "   Отправь боту /newproxy → введи ${CYAN}${SERVER}${NC} и порт ${CYAN}${PROXY_PORT}${NC}"
     echo -e "   → вставь ПОЛНЫЙ секрет: ${YELLOW}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${GREEN}💡 Теперь вы можете управлять прокси командой:${NC}"
@@ -548,17 +370,24 @@ show_github_link() {
     echo ""
 }
 
+# ---------- Основная установка ----------
 main() {
-    if [[ "${1:-}" == "--menu" ]]; then
-        if ! docker ps -a &>/dev/null || ! docker ps | grep -q "traefik\|telemt"; then
-            echo -e "${RED}❌ Прокси не установлен или контейнеры не запущены.${NC}"
-            echo -e "Сначала установите: ${YELLOW}./mtp.sh${NC}"
-            exit 1
-        fi
-        show_menu
-    else
-        install_proxy
-    fi
+    banner
+    check_root
+    install_docker
+    get_params
+    generate_secret
+    setup_directories
+    create_telemt_config
+    create_traefik_static
+    create_traefik_dynamic
+    create_docker_compose
+    start_containers
+    get_public_ip
+    open_firewall
+    get_proxy_link
+    create_global_command
+    print_result
 }
 
 main "$@"
