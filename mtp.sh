@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# MTProto Proxy Installer with Telemt + Traefik (Fake TLS)
+# MTProto Proxy Installer with Telemt (binary) + Traefik (Docker)
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.0 (stable Telemt + Traefik, fake TLS on 443)
+# Version: 7.1 (official telemt binary + traefik)
 # ============================================================
 
 set -euo pipefail
@@ -57,8 +57,8 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v7.0${CYAN}                                ║${NC}"
-    echo -e "${CYAN}║${NC}              ${WHITE}Telemt + Traefik | Fake TLS on 443${CYAN}            ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v7.1${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}              ${WHITE}Telemt (binary) + Traefik | Fake TLS on 443${CYAN}    ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -76,10 +76,9 @@ check_root() {
 
 install_docker() {
     if ! command -v docker &> /dev/null; then
-        step "Docker не найден. Скачиваем установщик..."
+        step "Docker не найден. Устанавливаем..."
         curl -fsSL https://get.docker.com -o get-docker.sh
-        sh get-docker.sh > /dev/null 2>&1 &
-        spinner $!
+        sh get-docker.sh > /dev/null 2>&1
         systemctl enable docker > /dev/null 2>&1
         systemctl start docker > /dev/null 2>&1
         rm -f get-docker.sh
@@ -96,6 +95,12 @@ install_docker() {
     else
         success "docker-compose уже установлен"
     fi
+}
+
+install_telemt() {
+    step "Устанавливаем Telemt (официальный бинарный файл)..."
+    curl -fsSL https://raw.githubusercontent.com/telemt/telemt/main/install.sh | sh
+    success "Telemt установлен"
 }
 
 get_params() {
@@ -147,7 +152,7 @@ generate_secret() {
 
 setup_directories() {
     INSTALL_DIR="/opt/mtproto-telemt"
-    mkdir -p "$INSTALL_DIR"/{traefik/dynamic,traefik/static,data}
+    mkdir -p "$INSTALL_DIR"/{traefik/dynamic,traefik/static}
     cd "$INSTALL_DIR"
     success "Директория установки: $INSTALL_DIR"
 }
@@ -156,7 +161,7 @@ create_telemt_config() {
     cat > "$INSTALL_DIR/telemt.toml" << EOF
 # Telemt configuration for Fake TLS
 secret = "$FULL_SECRET"
-bind = "0.0.0.0:1234"
+bind = "127.0.0.1:1234"
 users = []
 timeout = 300
 keepalive = 30
@@ -168,6 +173,29 @@ trace = false
 tls_domain = "$FAKE_DOMAIN"
 EOF
     success "Конфиг telemt.toml создан"
+}
+
+create_telemt_service() {
+    cat > /etc/systemd/system/telemt.service << EOF
+[Unit]
+Description=Telemt MTProto Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR
+ExecStart=/usr/local/bin/telemt $INSTALL_DIR/telemt.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable telemt
+    systemctl start telemt
+    success "Telemt запущен как systemd сервис"
 }
 
 create_traefik_static() {
@@ -206,54 +234,36 @@ tcp:
     telemt-service:
       loadBalancer:
         servers:
-          - address: "telemt:1234"
+          - address: "host.docker.internal:1234"
 EOF
     success "Динамический конфиг Traefik создан"
 }
 
 create_docker_compose() {
     cat > "$INSTALL_DIR/docker-compose.yml" << EOF
-version: '3.8'
-
 services:
-  telemt:
-    image: wh0nthacked/telemt-docker:latest
-    container_name: telemt
-    restart: always
-    volumes:
-      - ./telemt.toml:/app/telemt.toml:ro
-    command: ["/app/telemt", "/app/telemt.toml"]
-    networks:
-      - proxy-net
-
   traefik:
     image: traefik:v3.2
     container_name: traefik
     restart: always
     ports:
       - "${PROXY_PORT}:${PROXY_PORT}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./traefik/static:/etc/traefik:ro
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - proxy-net
-    depends_on:
-      - telemt
-
-networks:
-  proxy-net:
-    driver: bridge
 EOF
     success "docker-compose.yml создан"
 }
 
-start_containers() {
-    step "Запускаем контейнеры Telemt и Traefik..."
+start_traefik() {
+    step "Запускаем Traefik в Docker..."
     cd "$INSTALL_DIR"
     docker-compose up -d
     sleep 3
-    success "Контейнеры запущены"
+    success "Traefik запущен"
 }
 
 get_public_ip() {
@@ -303,25 +313,21 @@ fi
 INSTALL_DIR="/opt/mtproto-telemt"
 cd "$INSTALL_DIR"
 echo -e "\033[0;36m=== Управление прокси Telemt+Traefik ===\033[0m"
-echo "1) Посмотреть логи"
-echo "2) Перезапустить прокси"
-echo "3) Остановить прокси"
-echo "4) Показать статистику (docker stats)"
-echo "5) Изменить домен/IP (требуется перезапуск)"
+echo "1) Посмотреть логи Telemt"
+echo "2) Посмотреть логи Traefik"
+echo "3) Перезапустить всё"
+echo "4) Остановить всё"
+echo "5) Показать статус"
+echo "6) Показать статистику (docker stats)"
 echo "0) Выход"
 read -p "Выберите действие: " choice
 case $choice in
-    1) docker-compose logs -f ;;
-    2) docker-compose restart ;;
-    3) docker-compose down ;;
-    4) docker stats telemt traefik ;;
-    5)
-        read -p "Введите новый домен или IP: " NEW_ADDR
-        if [[ -n "$NEW_ADDR" ]]; then
-            echo "$NEW_ADDR" > current_addr
-            echo -e "\033[0;32mАдрес обновлён. Перезапустите прокси.\033[0m"
-        fi
-        ;;
+    1) journalctl -u telemt -f ;;
+    2) docker-compose logs -f traefik ;;
+    3) systemctl restart telemt && docker-compose restart ;;
+    4) systemctl stop telemt && docker-compose down ;;
+    5) systemctl status telemt --no-pager && docker-compose ps ;;
+    6) docker stats traefik ;;
     0) exit 0 ;;
     *) echo "Неверный выбор" ;;
 esac
@@ -349,7 +355,8 @@ print_result() {
     echo ""
     echo -e "${YELLOW}📊 СТАТИСТИКА И ТЕЛЕМЕТРИЯ${NC}"
     echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
-    echo -e "   Для просмотра логов: ${WHITE}docker-compose logs -f${NC} (в $INSTALL_DIR)"
+    echo -e "   Для просмотра логов Telemt: ${WHITE}journalctl -u telemt -f${NC}"
+    echo -e "   Для просмотра логов Traefik: ${WHITE}docker-compose logs -f traefik${NC} (в $INSTALL_DIR)"
     echo ""
     echo -e "${BLUE}🤖 РЕГИСТРАЦИЯ В @MTProxybot${NC}"
     echo -e "${BLUE}────────────────────────────────────────────────────────${NC}"
@@ -375,14 +382,16 @@ main() {
     banner
     check_root
     install_docker
+    install_telemt
     get_params
     generate_secret
     setup_directories
     create_telemt_config
+    create_telemt_service
     create_traefik_static
     create_traefik_dynamic
     create_docker_compose
-    start_containers
+    start_traefik
     get_public_ip
     open_firewall
     get_proxy_link
