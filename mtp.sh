@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 11.1 (fixed missing cc linker)
+# Version: 11.2 (fix missing cc linker)
 # ============================================================
 
 set -euo pipefail
@@ -40,7 +40,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v11.1${CYAN}                               ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v11.2${CYAN}                               ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Telemt (built from source) | Fake TLS${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -61,13 +61,13 @@ install_build_deps() {
     step "Устанавливаем компилятор C и инструменты сборки..."
     if command -v apt-get &> /dev/null; then
         apt-get update -qq
-        apt-get install -y -qq build-essential pkg-config libssl-dev > /dev/null 2>&1
+        apt-get install -y -qq build-essential pkg-config libssl-dev
         success "Установлены build-essential, libssl-dev, pkg-config"
     elif command -v yum &> /dev/null; then
-        yum install -y -q gcc gcc-c++ make openssl-devel > /dev/null 2>&1
+        yum install -y -q gcc gcc-c++ make openssl-devel
         success "Установлены gcc, make, openssl-devel"
     elif command -v dnf &> /dev/null; then
-        dnf install -y -q gcc gcc-c++ make openssl-devel > /dev/null 2>&1
+        dnf install -y -q gcc gcc-c++ make openssl-devel
         success "Установлены gcc, make, openssl-devel"
     else
         warn "Не удалось определить менеджер пакетов. Убедитесь, что установлены gcc, make и openssl-dev"
@@ -91,6 +91,9 @@ build_telemt() {
     rm -rf telemt
     git clone https://github.com/telemt/telemt
     cd telemt
+
+    # На всякий случай перезагрузим окружение
+    source "$HOME/.cargo/env"
 
     step "Сборка telemt (cargo build --release)..."
     cargo build --release
@@ -334,9 +337,9 @@ print_result() {
 main() {
     banner
     check_root
-    install_build_deps
-    install_rust
-    build_telemt
+    install_build_deps    # сначала ставим компилятор
+    install_rust          # затем Rust
+    build_telemt          # только потом сборка
     get_params
     generate_secret
     create_config
