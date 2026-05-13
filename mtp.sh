@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# MTProto Proxy Installer with Telemt (only, no Traefik)
+# MTProto Proxy Installer with Telemt (native)
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.2 (pure telemt, fake TLS on 443)
+# Version: 7.3 (no duplicate questions, improved)
 # ============================================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v7.2${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v7.3${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Telemt (native) | Fake TLS on port 443${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -74,24 +74,37 @@ check_root() {
     fi
 }
 
-install_telemt() {
-    step "Устанавливаем Telemt (официальный бинарный файл)..."
-    # Автоматизируем выбор языка и домена через переменные
-    export TELEMT_LANG=2  # русский
-    export TELEMT_TLS_DOMAIN="$FAKE_DOMAIN"
-    curl -fsSL https://raw.githubusercontent.com/telemt/telemt/main/install.sh | sh
-    success "Telemt установлен"
-}
-
+# ---------- Ввод параметров (один раз) ----------
 get_params() {
+    # Язык для telemt
     echo ""
-    step "Настройка прокси"
-    read -p "Введите порт (рекомендуется 443) [443]: " PROXY_PORT
+    echo -e "${YELLOW}Выберите язык для установщика Telemt:${NC}"
+    echo "   1) English (default)"
+    echo "   2) Русский"
+    read -p "Ваш выбор [1/2]: " LANG_CHOICE
+    if [[ "$LANG_CHOICE" == "2" ]]; then
+        TELEMT_LANG="2"
+        success "Выбран русский язык"
+    else
+        TELEMT_LANG="1"
+        success "Выбран английский язык"
+    fi
+
+    # Домен маскировки (один раз)
+    echo ""
+    read -p "Введите домен маскировки (Fake TLS) [1c.ru]: " FAKE_DOMAIN
+    FAKE_DOMAIN=${FAKE_DOMAIN:-1c.ru}
+    success "Домен маскировки: $FAKE_DOMAIN"
+
+    # Порт
+    read -p "Введите порт для прокси (рекомендуется 443) [443]: " PROXY_PORT
     PROXY_PORT=${PROXY_PORT:-443}
     if ! [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || [ "$PROXY_PORT" -lt 1 ] || [ "$PROXY_PORT" -gt 65535 ]; then
         error "Неверный порт"
     fi
+    success "Порт: $PROXY_PORT"
 
+    # Тип адреса
     echo ""
     echo -e "${YELLOW}Выберите тип адреса для подключения:${NC}"
     echo "   1) IP-адрес (автоопределение)"
@@ -115,13 +128,21 @@ get_params() {
     else
         SERVER_ADDR=""
     fi
-
-    read -p "Домен маскировки (Fake TLS) [1c.ru]: " FAKE_DOMAIN
-    FAKE_DOMAIN=${FAKE_DOMAIN:-1c.ru}
-    success "Порт: $PROXY_PORT, домен маскировки: $FAKE_DOMAIN"
 }
 
-get_public_ip() {
+# ---------- Установка Telemt без лишних вопросов ----------
+install_telemt() {
+    step "Устанавливаем Telemt (официальный бинарный файл)..."
+    # Передаём параметры через окружение, чтобы скрипт не задавал вопросы
+    export TELEMT_LANG="$TELEMT_LANG"
+    export TELEMT_TLS_DOMAIN="$FAKE_DOMAIN"
+    export TELEMT_NONINTERACTIVE=1
+    curl -fsSL https://raw.githubusercontent.com/telemt/telemt/main/install.sh | sh
+    success "Telemt установлен"
+}
+
+# ---------- Получение IP/домена сервера ----------
+get_server_addr() {
     if [[ -n "$SERVER_ADDR" ]]; then
         SERVER="$SERVER_ADDR"
         success "Используем домен: $SERVER"
@@ -138,6 +159,7 @@ get_public_ip() {
     fi
 }
 
+# ---------- Открытие порта ----------
 open_firewall() {
     if command -v ufw &> /dev/null; then
         step "Открываем порт $PROXY_PORT в UFW..."
@@ -153,20 +175,46 @@ open_firewall() {
     fi
 }
 
-get_proxy_link() {
-    # Получаем секрет из установленного telemt
-    SECRET=$(grep -oP 'secret\s*=\s*"\K[^"]+' /etc/telemt/config.toml 2>/dev/null || echo "")
+# ---------- Извлечение секрета из конфига Telemt ----------
+get_secret() {
+    # Конфиг Telemt после установки лежит в /etc/telemt/config.toml
+    if [[ -f /etc/telemt/config.toml ]]; then
+        SECRET=$(grep -oP '^secret\s*=\s*"\K[^"]+' /etc/telemt/config.toml | head -1)
+    fi
     if [[ -z "$SECRET" ]]; then
-        # Генерируем новый секрет
+        # Если не нашли, генерируем сами (должно быть не нужно)
+        step "Генерация Fake TLS секрета..."
         SECRET_PREFIX="ee"
         RANDOM_KEY=$(openssl rand -hex 16)
         DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
         SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
+        # Обновляем конфиг
+        mkdir -p /etc/telemt
+        cat > /etc/telemt/config.toml << EOF
+secret = "$SECRET"
+bind = "0.0.0.0:$PROXY_PORT"
+users = []
+timeout = 300
+keepalive = 30
+fast_mode = true
+ipv6 = false
+trace = false
+
+[censorship]
+tls_domain = "$FAKE_DOMAIN"
+EOF
+        systemctl restart telemt
     fi
+    success "Секрет получен"
+}
+
+# ---------- Готовим ссылку ----------
+get_proxy_link() {
     PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${SECRET}"
     success "Ссылка для подключения готова"
 }
 
+# ---------- Глобальная команда yurich ----------
 create_global_command() {
     cat > /usr/local/bin/yurich << 'EOF'
 #!/bin/bash
@@ -198,6 +246,7 @@ EOF
     success "Глобальная команда 'yurich' создана (запускайте: sudo yurich)"
 }
 
+# ---------- Финальный вывод ----------
 print_result() {
     clear
     banner
@@ -245,8 +294,9 @@ main() {
     check_root
     get_params
     install_telemt
-    get_public_ip
+    get_server_addr
     open_firewall
+    get_secret
     get_proxy_link
     create_global_command
     print_result
