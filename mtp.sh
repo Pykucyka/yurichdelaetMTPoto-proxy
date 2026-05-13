@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 # ============================================================
-# MTProto Proxy Installer with Telemt (native)
+# MTProto Proxy Installer with Telemt (Fake TLS, no duplication)
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.3 (no duplicate questions, improved)
+# Version: 7.4 (fixed duplicate questions, correct fake tls)
 # ============================================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v7.3${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v7.4${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Telemt (native) | Fake TLS on port 443${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -76,7 +76,7 @@ check_root() {
 
 # ---------- Ввод параметров (один раз) ----------
 get_params() {
-    # Язык для telemt
+    # Язык для установщика Telemt (будет передан через переменную)
     echo ""
     echo -e "${YELLOW}Выберите язык для установщика Telemt:${NC}"
     echo "   1) English (default)"
@@ -130,15 +130,69 @@ get_params() {
     fi
 }
 
-# ---------- Установка Telemt без лишних вопросов ----------
-install_telemt() {
-    step "Устанавливаем Telemt (официальный бинарный файл)..."
-    # Передаём параметры через окружение, чтобы скрипт не задавал вопросы
+# ---------- Установка Telemt без интерактива (только бинарник) ----------
+install_telemt_binary() {
+    step "Устанавливаем Telemt (официальный бинарный файл) без конфига..."
+    # Передаём параметры, чтобы скрипт не задавал вопросы
     export TELEMT_LANG="$TELEMT_LANG"
     export TELEMT_TLS_DOMAIN="$FAKE_DOMAIN"
+    export TELEMT_SKIP_CONF=1   # не создавать конфиг, мы сделаем сами
     export TELEMT_NONINTERACTIVE=1
     curl -fsSL https://raw.githubusercontent.com/telemt/telemt/main/install.sh | sh
-    success "Telemt установлен"
+    success "Бинарный файл Telemt установлен"
+}
+
+# ---------- Создание собственного конфига с Fake TLS ----------
+create_telemt_config() {
+    step "Создаём конфиг Telemt с Fake TLS секретом..."
+    # Генерируем правильный Fake TLS секрет: ee + 32 случайных hex + домен в hex
+    SECRET_PREFIX="ee"
+    RANDOM_KEY=$(openssl rand -hex 16)
+    DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
+    SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
+    
+    mkdir -p /etc/telemt
+    cat > /etc/telemt/config.toml << EOF
+# Telemt configuration with Fake TLS
+secret = "$SECRET"
+bind = "0.0.0.0:$PROXY_PORT"
+users = []
+timeout = 300
+keepalive = 30
+fast_mode = true
+ipv6 = false
+trace = false
+
+[censorship]
+tls_domain = "$FAKE_DOMAIN"
+EOF
+    success "Конфиг создан (/etc/telemt/config.toml)"
+    success "Секрет сгенерирован: $SECRET"
+}
+
+# ---------- Запуск Telemt как systemd сервис ----------
+enable_telemt_service() {
+    step "Настраиваем systemd сервис для Telemt..."
+    cat > /etc/systemd/system/telemt.service << EOF
+[Unit]
+Description=Telemt MTProto Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/etc/telemt
+ExecStart=/usr/local/bin/telemt /etc/telemt/config.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable telemt
+    systemctl start telemt
+    success "Telemt запущен как systemd сервис"
 }
 
 # ---------- Получение IP/домена сервера ----------
@@ -173,39 +227,6 @@ open_firewall() {
     else
         warn "Firewall не обнаружен. Убедитесь, что порт $PROXY_PORT открыт вручную."
     fi
-}
-
-# ---------- Извлечение секрета из конфига Telemt ----------
-get_secret() {
-    # Конфиг Telemt после установки лежит в /etc/telemt/config.toml
-    if [[ -f /etc/telemt/config.toml ]]; then
-        SECRET=$(grep -oP '^secret\s*=\s*"\K[^"]+' /etc/telemt/config.toml | head -1)
-    fi
-    if [[ -z "$SECRET" ]]; then
-        # Если не нашли, генерируем сами (должно быть не нужно)
-        step "Генерация Fake TLS секрета..."
-        SECRET_PREFIX="ee"
-        RANDOM_KEY=$(openssl rand -hex 16)
-        DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
-        SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
-        # Обновляем конфиг
-        mkdir -p /etc/telemt
-        cat > /etc/telemt/config.toml << EOF
-secret = "$SECRET"
-bind = "0.0.0.0:$PROXY_PORT"
-users = []
-timeout = 300
-keepalive = 30
-fast_mode = true
-ipv6 = false
-trace = false
-
-[censorship]
-tls_domain = "$FAKE_DOMAIN"
-EOF
-        systemctl restart telemt
-    fi
-    success "Секрет получен"
 }
 
 # ---------- Готовим ссылку ----------
@@ -293,10 +314,11 @@ main() {
     banner
     check_root
     get_params
-    install_telemt
+    install_telemt_binary
+    create_telemt_config
+    enable_telemt_service
     get_server_addr
     open_firewall
-    get_secret
     get_proxy_link
     create_global_command
     print_result
