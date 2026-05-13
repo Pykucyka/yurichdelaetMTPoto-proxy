@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 7.7 (reliable download with fallback)
+# Version: 7.8 (direct stable download, no API)
 # ============================================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v7.7${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v7.8${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Telemt (native) | Fake TLS on port 443${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -123,33 +123,28 @@ get_params() {
     fi
 }
 
-# ---------- Надёжная установка telemt ----------
+# ---------- Надёжная установка telemt (без API, прямая загрузка стабильной версии) ----------
 install_telemt_binary() {
-    step "Загружаем telemt..."
+    step "Загружаем telemt (стабильная версия 0.5.0)..."
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64)  ARCH="amd64" ;;
         aarch64) ARCH="arm64" ;;
-        *) error "Неподдерживаемая архитектура: $ARCH" ;;
+        *) error "Неподдерживаемая архитектура: $ARCH. Поддерживаются только x86_64 и arm64." ;;
     esac
     
-    # Пробуем GitHub API с таймаутом, если не работает — используем прямую ссылку на v0.5.0
-    step "Проверка наличия последней версии..."
-    URL=$(curl -s --max-time 5 https://api.github.com/repos/telemt/telemt/releases/latest | grep -oP '"browser_download_url":\s*"\K[^"]+' | grep "linux.*${ARCH}" | head -1)
-    
-    if [[ -z "$URL" ]]; then
-        warn "GitHub API не ответил, используем стабильную версию 0.5.0"
-        URL="https://github.com/telemt/telemt/releases/download/v0.5.0/telemt-linux-${ARCH}"
+    URL="https://github.com/telemt/telemt/releases/download/v0.5.0/telemt-linux-${ARCH}"
+    step "Скачивание с $URL"
+    curl -L --progress-bar --connect-timeout 15 --max-time 60 -o /usr/local/bin/telemt "$URL"
+    if [[ ! -f /usr/local/bin/telemt ]]; then
+        error "Не удалось скачать telemt. Проверьте соединение с GitHub."
     fi
-    
-    step "Скачивание (это может занять несколько секунд)..."
-    curl -L --progress-bar --connect-timeout 10 --max-time 30 -o /usr/local/bin/telemt "$URL"
     chmod +x /usr/local/bin/telemt
     success "Telemt установлен в /usr/local/bin/telemt"
 }
 
 create_telemt_config() {
-    step "Создаём конфиг Telemt..."
+    step "Создаём конфиг Telemt с Fake TLS секретом..."
     SECRET_PREFIX="ee"
     RANDOM_KEY=$(openssl rand -hex 16)
     DOMAIN_HEX=$(echo -n "$FAKE_DOMAIN" | xxd -ps)
@@ -173,7 +168,7 @@ EOF
 }
 
 enable_telemt_service() {
-    step "Настраиваем systemd сервис..."
+    step "Настраиваем systemd сервис для Telemt..."
     cat > /etc/systemd/system/telemt.service << EOF
 [Unit]
 Description=Telemt MTProto Proxy
