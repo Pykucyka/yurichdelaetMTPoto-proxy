@@ -56,7 +56,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v2.1${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v2.2${CYAN}                                ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -118,26 +118,24 @@ get_params() {
     success "Порт: $PROXY_PORT, домен: $DOMAIN"
 }
 
-# Генерация секретов (короткий 32 символа и полный Fake TLS)
+# Генерация полного Fake TLS секрета (он же будет использоваться и для бота, и для контейнера)
 generate_secret() {
-    step "Генерация секрета Fake TLS..."
+    step "Генерация Fake TLS секрета..."
     (
         sleep 0.5
         SECRET_PREFIX="ee"
-        RANDOM_KEY=$(openssl rand -hex 16)          # 32 символа для бота
+        RANDOM_KEY=$(openssl rand -hex 16)          # 32 символа
         DOMAIN_HEX=$(echo -n "$DOMAIN" | xxd -ps)
         FULL_SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
-        echo "$RANDOM_KEY" > /tmp/mtproxy_short_secret
         echo "$FULL_SECRET" > /tmp/mtproxy_full_secret
     ) &
     spinner $!
-    SHORT_SECRET=$(cat /tmp/mtproxy_short_secret)
     FULL_SECRET=$(cat /tmp/mtproxy_full_secret)
-    rm -f /tmp/mtproxy_short_secret /tmp/mtproxy_full_secret
-    success "Секрет создан (короткий: 32 символа)"
+    rm -f /tmp/mtproxy_full_secret
+    success "Fake TLS секрет создан"
 }
 
-# Запуск контейнера
+# Запуск контейнера с полным секретом
 run_container() {
     step "Запускаем контейнер..."
     docker rm -f mtproxy 2>/dev/null || true
@@ -181,7 +179,7 @@ open_firewall() {
     fi
 }
 
-# Получение ссылки
+# Получение ссылки из логов контейнера
 get_proxy_link() {
     step "Ожидаем генерации ссылки прокси..."
     (
@@ -224,23 +222,25 @@ print_result() {
     echo -e "   • IP:      ${CYAN}${IP}${NC}"
     echo -e "   • Порт:    ${CYAN}${PROXY_PORT}${NC}"
     echo -e "   • Домен:   ${CYAN}${DOMAIN}${NC}"
-    echo -e "   • Секрет для @MTProxybot (32 символа): ${YELLOW}${SHORT_SECRET}${NC}"
-    echo -e "   • Полный секрет (для опытных): ${CYAN}${FULL_SECRET}${NC}"
+    echo -e "   • Fake TLS секрет (ПОЛНЫЙ): ${YELLOW}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${BOLD}🔗 Готовая ссылка (нажми на неё в Telegram):${NC}"
     echo -e "   ${MAGENTA}${PROXY_LINK}${NC}"
     echo ""
     echo -e "${BOLD}🤖 Регистрация в @MTProxybot:${NC}"
     echo -e "   1. Открой ${CYAN}@MTProxybot${NC}"
-    echo -e "   2. Отправь /newproxy"
+    echo -e "   2. Отправь команду ${YELLOW}/newproxy${NC}"
     echo -e "   3. Введи ${CYAN}${IP}${NC} и порт ${CYAN}${PROXY_PORT}${NC}"
-    echo -e "   4. Вставь короткий секрет (32 символа): ${YELLOW}${SHORT_SECRET}${NC}"
+    echo -e "   4. Вставь ПОЛНЫЙ секрет (скопируй выше): ${YELLOW}${FULL_SECRET}${NC}"
     echo -e "   5. Бот выдаст TAG — сохрани его (необязательно)."
+    echo -e "   6. После этого скопируй ссылку, которую даст бот, и нажми на неё — подключение будет работать."
     echo ""
     echo -e "${BOLD}🛠 Управление прокси:${NC}"
     echo -e "   • Логи:       ${YELLOW}docker logs -f mtproxy${NC}"
     echo -e "   • Перезапуск: ${YELLOW}docker restart mtproxy${NC}"
     echo -e "   • Удаление:   ${YELLOW}docker rm -f mtproxy${NC}"
+    echo ""
+    echo -e "${BOLD}⚠️  ВАЖНО:${NC} Используйте именно ПОЛНЫЙ секрет (длинная строка), который выводит скрипт. Короткий (32 символа) НЕ подходит для Fake TLS."
     echo ""
     show_github_link
 }
