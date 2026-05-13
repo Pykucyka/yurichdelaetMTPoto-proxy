@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 4.5 (optimized, bug-free)
+# Version: 5.0 (fixed proxy with mtproxy/mtproxy image)
 # ============================================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v4.5${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v5.0${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Global command: yurich | TUI Menu${CYAN}              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -76,7 +76,7 @@ check_root() {
     fi
 }
 
-# ---------- Установка Docker (с отловом ошибок) ----------
+# ---------- Установка Docker ----------
 install_docker() {
     if ! command -v docker &> /dev/null; then
         step "Docker не найден. Скачиваем установщик..."
@@ -98,7 +98,14 @@ install_docker() {
     fi
 }
 
-# ---------- Оптимизация ядра для прокси ----------
+# ---------- Загрузка образа ----------
+pull_docker_image() {
+    step "Загружаем Docker-образ mtproxy/mtproxy (официальный MTProto)..."
+    docker pull mtproxy/mtproxy || error "Не удалось загрузить образ. Проверьте интернет."
+    success "Образ загружен"
+}
+
+# ---------- Оптимизация ядра ----------
 optimize_kernel() {
     step "Настройка параметров ядра для лучшей производительности..."
     cat > /etc/sysctl.d/99-mtproxy.conf << EOF
@@ -111,14 +118,7 @@ net.ipv4.tcp_fastopen = 3
 net.ipv4.tcp_slow_start_after_idle = 0
 EOF
     sysctl -p /etc/sysctl.d/99-mtproxy.conf > /dev/null 2>&1 || warn "Не удалось применить настройки sysctl (можно игнорировать)"
-    success "Параметры ядра оптимизированы (увеличены буферы, включён TCP Fast Open)"
-}
-
-# ---------- Загрузка образа ----------
-pull_docker_image() {
-    step "Загружаем Docker-образ ellermister/mtproxy (Fake TLS)..."
-    docker pull ellermister/mtproxy || error "Не удалось загрузить образ. Проверьте интернет."
-    success "Образ загружен"
+    success "Параметры ядра оптимизированы"
 }
 
 # ---------- Ввод параметров ----------
@@ -162,37 +162,40 @@ get_params() {
     success "Порт: $PROXY_PORT, домен маскировки: $DOMAIN"
 }
 
-# ---------- Генерация секрета ----------
+# ---------- Генерация секретов ----------
 generate_secret() {
     step "Генерация Fake TLS секрета..."
     (
         sleep 0.5
-        SECRET_PREFIX="ee"
+        # 1. Генерируем базовый 32-символьный секрет для контейнера
         RANDOM_KEY=$(openssl rand -hex 16)
+        # 2. Генерируем полный Fake TLS секрет для клиентов
+        SECRET_PREFIX="ee"
         DOMAIN_HEX=$(echo -n "$DOMAIN" | xxd -ps)
         FULL_SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
+        echo "$RANDOM_KEY" > /tmp/mtproxy_base_secret
         echo "$FULL_SECRET" > /tmp/mtproxy_full_secret
     ) &
     spinner $!
+    BASE_SECRET=$(cat /tmp/mtproxy_base_secret 2>/dev/null || echo "")
     FULL_SECRET=$(cat /tmp/mtproxy_full_secret 2>/dev/null || echo "")
-    rm -f /tmp/mtproxy_full_secret
-    if [[ -z "$FULL_SECRET" ]]; then
-        error "Не удалось сгенерировать секрет"
+    rm -f /tmp/mtproxy_base_secret /tmp/mtproxy_full_secret
+    if [[ -z "$BASE_SECRET" || -z "$FULL_SECRET" ]]; then
+        error "Не удалось сгенерировать секреты"
     fi
-    success "Секрет создан"
+    success "Секреты созданы"
 }
 
 # ---------- Запуск контейнера ----------
 run_container() {
-    step "Запускаем контейнер ellermister/mtproxy..."
+    step "Запускаем контейнер mtproxy/mtproxy (Fake TLS поддержка)..."
     docker rm -f mtproxy 2>/dev/null || true
     docker run -d \
         --name mtproxy \
         --restart=always \
         -p ${PROXY_PORT}:443 \
-        -p 8080:80 \
-        -e SECRET="${FULL_SECRET}" \
-        ellermister/mtproxy > /dev/null || error "Не удалось запустить контейнер"
+        -e SECRET="${BASE_SECRET}" \
+        mtproxy/mtproxy > /dev/null || error "Не удалось запустить контейнер"
     sleep 3
     success "Контейнер запущен"
 }
@@ -220,27 +223,23 @@ open_firewall() {
     if command -v ufw &> /dev/null; then
         step "Открываем порт $PROXY_PORT в UFW..."
         ufw allow ${PROXY_PORT}/tcp > /dev/null 2>&1
-        ufw allow 8080/tcp > /dev/null 2>&1
-        success "Порты открыты (UFW)"
+        success "Порт открыт (UFW)"
     elif command -v firewall-cmd &> /dev/null; then
         step "Открываем порт $PROXY_PORT в firewalld..."
         firewall-cmd --permanent --add-port=${PROXY_PORT}/tcp > /dev/null 2>&1
-        firewall-cmd --permanent --add-port=8080/tcp > /dev/null 2>&1
         firewall-cmd --reload > /dev/null 2>&1
-        success "Порты открыты (firewalld)"
+        success "Порт открыт (firewalld)"
     else
-        warn "Firewall не обнаружен. Убедитесь, что порты $PROXY_PORT и 8080 открыты вручную."
+        warn "Firewall не обнаружен. Убедитесь, что порт $PROXY_PORT открыт вручную."
     fi
 }
 
 # ---------- Формирование ссылки ----------
 get_proxy_link() {
-    step "Ожидаем генерации ссылки..."
-    sleep 3
-    PROXY_LINK=$(docker logs mtproxy 2>&1 | grep -oE 'tg://proxy\?[^ ]+' | head -1)
-    if [[ -z "$PROXY_LINK" ]]; then
-        PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${FULL_SECRET}"
-    fi
+    step "Формируем ссылку для подключения..."
+    # Используем полный Fake TLS секрет для ссылки
+    PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${FULL_SECRET}"
+    success "Ссылка создана"
 }
 
 # ---------- Глобальная команда yurich ----------
@@ -292,17 +291,13 @@ show_stats() {
     echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
     echo ""
     
-    echo -e "${YELLOW}📈 Использование ресурсов (CPU / RAM / NET):${NC}"
-    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" | grep -E "mtproxy|CONTAINER" | sed 's/^/   /'
+    echo -e "${YELLOW}📈 Использование ресурсов (CPU / RAM):${NC}"
+    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}" | grep -E "mtproxy|CONTAINER" | sed 's/^/   /'
     echo ""
     
-    echo -e "${YELLOW}🌐 Сетевые подключения:${NC}"
+    echo -e "${YELLOW}🌐 Активные подключения:${NC}"
     CONNS=$(docker exec mtproxy ss -tun 2>/dev/null | tail -n +2 | wc -l || echo "0")
-    echo -e "   ➤ Активных TCP-соединений: ${GREEN}${CONNS}${NC}"
-    echo ""
-    
-    echo -e "${YELLOW}📡 Веб-интерфейс (для браузера):${NC}"
-    echo -e "   ➤ http://${SERVER}:8080"
+    echo -e "   ➤ TCP-соединений: ${GREEN}${CONNS}${NC}"
     
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
@@ -323,16 +318,6 @@ show_info() {
     fi
     
     PROXY_PORT=$(docker inspect mtproxy 2>/dev/null | grep -oP '"HostPort":\s*"\K[^"]+' | head -1 || echo "8443")
-    FULL_SECRET=$(docker exec mtproxy env 2>/dev/null | grep '^SECRET=' | cut -d= -f2)
-    [[ -z "$FULL_SECRET" ]] && FULL_SECRET="(не удалось получить)"
-    
-    # Извлечение домена маскировки из секрета
-    if [[ ${#FULL_SECRET} -gt 6 ]]; then
-        DOMAIN_HEX=$(echo "$FULL_SECRET" | sed 's/^ee[0-9a-f]\{32\}//')
-        DOMAIN=$(echo -n "$DOMAIN_HEX" | xxd -p -r 2>/dev/null || echo "cloudflare.com")
-    else
-        DOMAIN="cloudflare.com"
-    fi
     
     echo -e "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}${SERVER}${NC}"
     echo -e "   ${BOLD}Порт:${NC}                 ${YELLOW}${PROXY_PORT}${NC}"
@@ -341,8 +326,7 @@ show_info() {
     echo -e "   ${WHITE}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${MAGENTA}🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ${NC}"
-    echo -e "   Telegram-ссылка: ${GREEN}tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${FULL_SECRET}${NC}"
-    echo -e "   Альтернативная: ${WHITE}https://t.me/proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${FULL_SECRET}${NC}"
+    echo -e "   Telegram-ссылка: ${GREEN}${PROXY_LINK}${NC}"
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
 }
@@ -383,12 +367,19 @@ reinstall_proxy() {
     
     OLD_SECRET=$(docker inspect mtproxy 2>/dev/null | grep -oP '"SECRET":\s*"\K[^"]+' || echo "")
     if [[ -n "$OLD_SECRET" ]]; then
-        echo -e "Используем существующий секрет."
-        FULL_SECRET="$OLD_SECRET"
+        echo -e "Используем существующий базовый секрет."
+        BASE_SECRET="$OLD_SECRET"
         PROXY_PORT=$(docker inspect mtproxy | grep -oP '"HostPort":\s*"\K[^"]+' | head -1)
-        DOMAIN=$(echo -n "$FULL_SECRET" | sed 's/^ee[0-9a-f]\{32\}//' | xxd -p -r 2>/dev/null || echo "cloudflare.com")
+        # Восстанавливаем полный секрет из старой ссылки
+        FULL_SECRET=$(docker logs mtproxy 2>&1 | grep -oE 'tg://proxy\?[^ ]+secret=ee[^&]+' | head -1 | grep -oE 'ee[^&]+' || echo "")
+        if [[ -z "$FULL_SECRET" ]]; then
+            DOMAIN=$(docker inspect mtproxy | grep -oP '"domain":\s*"\K[^"]+' || echo "cloudflare.com")
+            SECRET_PREFIX="ee"
+            DOMAIN_HEX=$(echo -n "$DOMAIN" | xxd -ps)
+            FULL_SECRET="${SECRET_PREFIX}${BASE_SECRET}${DOMAIN_HEX}"
+        fi
     else
-        echo -e "Генерация нового секрета..."
+        echo -e "Генерация новых секретов..."
         get_params
         generate_secret
     fi
@@ -398,9 +389,8 @@ reinstall_proxy() {
         --name mtproxy \
         --restart=always \
         -p ${PROXY_PORT:-8443}:443 \
-        -p 8080:80 \
-        -e SECRET="${FULL_SECRET}" \
-        ellermister/mtproxy > /dev/null || error "Не удалось переустановить контейнер"
+        -e SECRET="${BASE_SECRET}" \
+        mtproxy/mtproxy > /dev/null || error "Не удалось переустановить контейнер"
     sleep 2
     success "Прокси переустановлен"
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
@@ -461,6 +451,8 @@ change_domain() {
             warn "Не удалось определить IP автоматически, оставлен старый: $SERVER"
         fi
     fi
+    # Обновляем ссылку с новым адресом
+    PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${FULL_SECRET}"
     echo "$SERVER" > /opt/mtproto-proxy/current_addr
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
@@ -468,7 +460,7 @@ change_domain() {
 
 # ---------- Проверка обновлений при входе в меню ----------
 auto_update_check() {
-    SCRIPT_VERSION="4.5"
+    SCRIPT_VERSION="5.0"
     REMOTE_VERSION=$(curl -s --max-time 3 https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh | grep -E '^# Version: ' | head -1 | awk '{print $3}' || echo "")
     if [[ -n "$REMOTE_VERSION" && "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]]; then
         echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
@@ -486,6 +478,14 @@ show_menu() {
     SERVER=$(cat /opt/mtproto-proxy/current_addr 2>/dev/null || echo "")
     if [[ -z "$SERVER" ]]; then
         SERVER=$(curl -s -4 ifconfig.me || echo "unknown")
+    fi
+    # Получаем текущие значения из контейнера
+    PROXY_PORT=$(docker inspect mtproxy 2>/dev/null | grep -oP '"HostPort":\s*"\K[^"]+' | head -1 || echo "8443")
+    FULL_SECRET=$(docker exec mtproxy env 2>/dev/null | grep '^SECRET=' | cut -d= -f2 || echo "")
+    if [[ -n "$FULL_SECRET" ]]; then
+        DOMAIN_HEX=$(echo "$FULL_SECRET" | sed 's/^ee[0-9a-f]\{32\}//')
+        DOMAIN=$(echo -n "$DOMAIN_HEX" | xxd -p -r 2>/dev/null || echo "cloudflare.com")
+        PROXY_LINK="tg://proxy?server=${SERVER}&port=${PROXY_PORT}&secret=${FULL_SECRET}"
     fi
     auto_update_check
     while true; do
@@ -574,12 +574,12 @@ print_result() {
     echo ""
     echo -e "${YELLOW}📊 СТАТИСТИКА И ТЕЛЕМЕТРИЯ${NC}"
     echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
-    echo -e "   Статистика в веб-интерфейсе: ${WHITE}http://${SERVER}:8080${NC}"
+    echo -e "   Для просмотра статистики в реальном времени используйте меню прокси."
     echo ""
     echo -e "${BLUE}🤖 РЕГИСТРАЦИЯ В @MTProxybot${NC}"
     echo -e "${BLUE}────────────────────────────────────────────────────────${NC}"
     echo -e "   Отправь боту /newproxy → введи ${CYAN}${SERVER}${NC} и порт ${CYAN}${PROXY_PORT}${NC}"
-    echo -e "   → вставь секрет: ${YELLOW}${FULL_SECRET}${NC}"
+    echo -e "   → вставь ПОЛНЫЙ секрет: ${YELLOW}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${GREEN}💡 Теперь вы можете управлять прокси командой:${NC}"
     echo -e "   ${YELLOW}sudo yurich${NC}"
