@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 4.3 (removed live stats, fixed regular stats)
+# Version: 4.4 (removed live stats, fixed all)
 # =============================================
 
 set -euo pipefail
@@ -57,7 +57,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v4.3${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v4.4${CYAN}                                ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Global command: yurich | TUI Menu${CYAN}              ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -234,12 +234,13 @@ EOF
     success "Глобальная команда 'yurich' создана (запускайте: sudo yurich)"
 }
 
-# Функция обычной статистики (разовая)
+# Единая статистика (разовая)
 show_stats() {
     clear
     banner
     echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+    
     if ! docker ps | grep -q mtproxy; then
         echo -e "${RED}❌ Контейнер mtproxy не запущен!${NC}"
         echo -e "Запустите: ${YELLOW}docker start mtproxy${NC}"
@@ -247,28 +248,36 @@ show_stats() {
         read
         return
     fi
+    
+    # Uptime
+    UPTIME=$(docker inspect --format='{{.State.StartedAt}}' mtproxy)
+    UPTIME_SEC=$(date -d "$UPTIME" +%s 2>/dev/null || echo 0)
+    NOW_SEC=$(date +%s)
+    DIFF=$((NOW_SEC - UPTIME_SEC))
+    if [[ $DIFF -lt 0 ]]; then DIFF=0; fi
+    DAYS=$((DIFF / 86400))
+    HOURS=$(( (DIFF % 86400) / 3600 ))
+    MINS=$(( (DIFF % 3600) / 60 ))
+    
+    echo -e "${YELLOW}⏱️  Uptime контейнера:${NC}"
+    echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
+    echo ""
+    
+    # Использование ресурсов
     echo -e "${YELLOW}📈 Использование ресурсов (CPU / RAM / NET):${NC}"
     docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" | grep -E "mtproxy|CONTAINER" | sed 's/^/   /'
     echo ""
+    
+    # Количество соединений
     echo -e "${YELLOW}🌐 Сетевые подключения:${NC}"
     CONNS=$(docker exec mtproxy ss -tun 2>/dev/null | tail -n +2 | wc -l || echo "0")
     echo -e "   ➤ Активных TCP-соединений: ${GREEN}${CONNS}${NC}"
     echo ""
-    echo -e "${YELLOW}⏱️  Uptime контейнера:${NC}"
-    UPTIME=$(docker inspect --format='{{.State.StartedAt}}' mtproxy | xargs -I {} date -d {} +%s 2>/dev/null || echo "0")
-    if [[ "$UPTIME" != "0" ]]; then
-        NOW=$(date +%s)
-        DIFF=$((NOW - UPTIME))
-        DAYS=$((DIFF / 86400))
-        HOURS=$(( (DIFF % 86400) / 3600 ))
-        MINS=$(( (DIFF % 3600) / 60 ))
-        echo -e "   ➤ ${DAYS} дн, ${HOURS} ч, ${MINS} мин"
-    else
-        echo -e "   ➤ Не удалось определить"
-    fi
-    echo ""
-    echo -e "${YELLOW}📡 Веб-интерфейс (статистика в браузере):${NC}"
+    
+    # Веб-интерфейс
+    echo -e "${YELLOW}📡 Веб-интерфейс (для браузера):${NC}"
     echo -e "   ➤ http://${SERVER}:8080"
+    
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
 }
@@ -278,6 +287,15 @@ show_info() {
     banner
     echo -e "${GREEN}ℹ️  ИНФОРМАЦИЯ О ПРОКСИ${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+    
+    if ! docker ps | grep -q mtproxy; then
+        echo -e "${RED}❌ Контейнер mtproxy не запущен!${NC}"
+        echo -e "Запустите: ${YELLOW}docker start mtproxy${NC}"
+        echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
+        read
+        return
+    fi
+    
     PROXY_PORT=$(docker inspect mtproxy 2>/dev/null | grep -oP '"HostPort":\s*"\K[^"]+' | head -1 || echo "8443")
     FULL_SECRET=$(docker exec mtproxy env 2>/dev/null | grep '^SECRET=' | cut -d= -f2)
     if [[ -z "$FULL_SECRET" ]]; then
@@ -289,6 +307,7 @@ show_info() {
     else
         DOMAIN="cloudflare.com"
     fi
+    
     echo -e "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}${SERVER}${NC}"
     echo -e "   ${BOLD}Порт:${NC}                 ${YELLOW}${PROXY_PORT}${NC}"
     echo -e "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}${DOMAIN}${NC}"
@@ -307,8 +326,10 @@ update_script() {
     banner
     echo -e "${GREEN}🔄 ОБНОВЛЕНИЕ СКРИПТА${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+    
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     cd "$SCRIPT_DIR"
+    
     if [[ -d ".git" ]]; then
         git pull origin main
         echo -e "${GREEN}✅ Скрипт обновлён.${NC}"
@@ -331,6 +352,7 @@ reinstall_proxy() {
     banner
     echo -e "${GREEN}🔄 ПЕРЕУСТАНОВКА ПРОКСИ${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+    
     OLD_SECRET=$(docker inspect mtproxy 2>/dev/null | grep -oP '"SECRET":\s*"\K[^"]+' || echo "")
     if [[ -n "$OLD_SECRET" ]]; then
         echo -e "Используем существующий секрет."
@@ -341,6 +363,7 @@ reinstall_proxy() {
         get_params
         generate_secret
     fi
+    
     docker rm -f mtproxy 2>/dev/null || true
     docker run -d \
         --name mtproxy \
@@ -412,7 +435,7 @@ change_domain() {
 }
 
 auto_update_check() {
-    SCRIPT_VERSION="4.3"
+    SCRIPT_VERSION="4.4"
     REMOTE_VERSION=$(curl -s https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh | grep -E '^# Version: ' | head -1 | awk '{print $3}')
     if [[ -n "$REMOTE_VERSION" && "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]]; then
         echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
@@ -438,7 +461,7 @@ show_menu() {
         echo -e "${GREEN}║                    📋 МЕНЮ УПРАВЛЕНИЯ                      ║${NC}"
         echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
-        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика прокси (нагрузка, подключения)${NC}"
+        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика прокси${NC}"
         echo -e "   ${CYAN}2${NC} ─ ${YELLOW}ℹ️  Информация о прокси (секрет, ссылка)${NC}"
         echo -e "   ${CYAN}3${NC} ─ ${YELLOW}🌐 Изменить домен/IP для подключения${NC}"
         echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🔄 Обновить скрипт до актуальной версии${NC}"
