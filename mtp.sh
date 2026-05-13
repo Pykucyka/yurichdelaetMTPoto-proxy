@@ -9,38 +9,59 @@
 
 set -euo pipefail
 
-# Цвета
+# Цвета и стили
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
+WHITE='\033[1;37m'
 BOLD='\033[1m'
 BLINK='\033[5m'
 NC='\033[0m'
 
-# Прогресс-бар
-progress_bar() {
-    local duration=$1
-    local steps=20
-    local sleep_interval=$(echo "$duration / $steps" | bc -l)
-    echo -ne "${CYAN}["
-    for ((i=0; i<=steps; i++)); do
-        echo -ne "█"
-        sleep "$sleep_interval"
+# Спиннер для длительных операций
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while ps -p "$pid" &>/dev/null; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
     done
-    echo -e "]${NC}"
+    printf "    \b\b\b\b"
 }
 
-# Баннер (короткий, без ascii-арта, но красивый)
+# КРАСИВЫЙ БАННЕР: YURICH + DELAET (крупно, две секции)
 banner() {
-    echo -e "${CYAN}╔════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║     🚀 MTProto Proxy Installer by yurichdelaet  ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════╝${NC}"
+    clear
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}██╗   ██╗██╗   ██╗██████╗ ██╗ ██████╗██╗  ██╗${CYAN}           ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}╚██╗ ██╔╝██║   ██║██╔══██╗██║██╔════╝██║  ██║${CYAN}           ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA} ╚████╔╝ ██║   ██║██████╔╝██║██║     ███████║${CYAN}           ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}  ╚██╔╝  ██║   ██║██╔══██╗██║██║     ██╔══██║${CYAN}           ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}   ██║   ╚██████╔╝██║  ██║██║╚██████╗██║  ██║${CYAN}           ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}   ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝ ╚═════╝╚═╝  ╚═╝${CYAN}           ║${NC}"
+    echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}██████╗ ███████╗██╗      █████╗ ███████╗████████╗${CYAN}       ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}██╔══██╗██╔════╝██║     ██╔══██╗██╔════╝╚══██╔══╝${CYAN}       ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}██║  ██║█████╗  ██║     ███████║█████╗     ██║${CYAN}          ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}██║  ██║██╔══╝  ██║     ██╔══██║██╔══╝     ██║${CYAN}          ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}██████╔╝███████╗███████╗██║  ██║███████╗   ██║${CYAN}          ║${NC}"
+    echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
+    echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v2.0${CYAN}                                ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
 }
 
-# Функции
+# Функции вывода
 step() { echo -e "${BLUE}[➜]${NC} $1"; }
 success() { echo -e "${GREEN}[✓]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
@@ -53,20 +74,34 @@ check_root() {
     fi
 }
 
-# Установка Docker с прогресс-баром
+# Установка Docker с реальным прогрессом
 install_docker() {
     if ! command -v docker &> /dev/null; then
-        step "Docker не найден. Устанавливаем..."
-        curl -fsSL https://get.docker.com -o get-docker.sh > /dev/null 2>&1
-        progress_bar 2
-        sh get-docker.sh > /dev/null 2>&1
-        systemctl enable docker > /dev/null 2>&1
-        systemctl start docker > /dev/null 2>&1
-        rm -f get-docker.sh
-        success "Docker установлен"
+        step "Docker не найден. Скачиваем установщик..."
+        curl -# -o get-docker.sh https://get.docker.com
+        echo -e "${GREEN}✓ Установщик загружен${NC}"
+        
+        step "Устанавливаем Docker (это может занять минуту)..."
+        bash get-docker.sh > docker_install.log 2>&1 &
+        spinner $!
+        if [ $? -eq 0 ]; then
+            rm -f get-docker.sh docker_install.log
+            systemctl enable docker > /dev/null 2>&1
+            systemctl start docker > /dev/null 2>&1
+            success "Docker установлен"
+        else
+            error "Ошибка установки Docker. Логи: cat docker_install.log"
+        fi
     else
         success "Docker уже установлен"
     fi
+}
+
+# Загрузка Docker-образа с прогрессом
+pull_docker_image() {
+    step "Загружаем Docker-образ ellermister/mtproxy (может занять некоторое время)..."
+    docker pull ellermister/mtproxy
+    success "Docker-образ загружен"
 }
 
 # Ввод параметров
@@ -83,17 +118,24 @@ get_params() {
     success "Порт: $PROXY_PORT, домен: $DOMAIN"
 }
 
-# Генерация секрета
+# Генерация секрета (быстро, но для красоты покажем спиннер)
 generate_secret() {
     step "Генерация секрета Fake TLS..."
-    SECRET_PREFIX="ee"
-    RANDOM_KEY=$(openssl rand -hex 16)
-    DOMAIN_HEX=$(echo -n "$DOMAIN" | xxd -ps)
-    FULL_SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
+    (
+        sleep 0.5
+        SECRET_PREFIX="ee"
+        RANDOM_KEY=$(openssl rand -hex 16)
+        DOMAIN_HEX=$(echo -n "$DOMAIN" | xxd -ps)
+        FULL_SECRET="${SECRET_PREFIX}${RANDOM_KEY}${DOMAIN_HEX}"
+        echo "$FULL_SECRET" > /tmp/mtproxy_secret
+    ) &
+    spinner $!
+    FULL_SECRET=$(cat /tmp/mtproxy_secret)
+    rm -f /tmp/mtproxy_secret
     success "Секрет создан"
 }
 
-# Запуск контейнера с прогресс-баром
+# Запуск контейнера
 run_container() {
     step "Запускаем контейнер..."
     docker rm -f mtproxy 2>/dev/null || true
@@ -104,21 +146,24 @@ run_container() {
         -p 8080:80 \
         -e SECRET="${FULL_SECRET}" \
         ellermister/mtproxy > /dev/null
-    progress_bar 2
+    sleep 1
     success "Контейнер запущен"
 }
 
 # Получение IP
 get_public_ip() {
+    step "Определяем внешний IP..."
     IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || curl -s -4 ipinfo.io/ip)
     if [[ -z "$IP" ]]; then
         warn "Не удалось определить IP автоматически"
         read -p "Введите IP сервера вручную: " IP
         [[ -z "$IP" ]] && error "IP не введён"
+    else
+        success "IP: $IP"
     fi
 }
 
-# Открытие порта
+# Открытие порта в firewall
 open_firewall() {
     if command -v ufw &> /dev/null; then
         step "Открываем порт $PROXY_PORT в UFW..."
@@ -134,18 +179,25 @@ open_firewall() {
     fi
 }
 
-# Получение ссылки с прогресс-баром
+# Получение ссылки с анимацией
 get_proxy_link() {
-    step "Ожидаем генерации ссылки..."
-    progress_bar 3
-    for i in {1..10}; do
-        PROXY_LINK=$(docker logs mtproxy 2>&1 | grep -oE 'tg://proxy\?[^ ]+' | head -1)
-        if [[ -n "$PROXY_LINK" ]]; then
-            break
-        fi
-        sleep 1
-    done
-    if [[ -z "$PROXY_LINK" ]]; then
+    step "Ожидаем генерации ссылки прокси..."
+    (
+        sleep 3
+        for i in {1..10}; do
+            PROXY_LINK=$(docker logs mtproxy 2>&1 | grep -oE 'tg://proxy\?[^ ]+' | head -1)
+            if [[ -n "$PROXY_LINK" ]]; then
+                echo "$PROXY_LINK" > /tmp/mtproxy_link
+                break
+            fi
+            sleep 1
+        done
+    ) &
+    spinner $!
+    if [[ -f /tmp/mtproxy_link ]]; then
+        PROXY_LINK=$(cat /tmp/mtproxy_link)
+        rm -f /tmp/mtproxy_link
+    else
         warn "Не удалось получить ссылку из логов. Используем сгенерированную вручную."
         PROXY_LINK="tg://proxy?server=${IP}&port=${PROXY_PORT}&secret=${FULL_SECRET}"
     fi
@@ -163,10 +215,8 @@ show_github_link() {
 
 # Итоговый вывод
 print_result() {
-    clear
     banner
-    echo ""
-    success "Установка завершена!"
+    success "Установка успешно завершена!"
     echo ""
     echo -e "${BOLD}📦 Данные прокси:${NC}"
     echo -e "   • IP:      ${CYAN}${IP}${NC}"
@@ -183,7 +233,7 @@ print_result() {
     echo -e "   3. Введи ${CYAN}${IP}${NC} и порт ${CYAN}${PROXY_PORT}${NC}"
     echo -e "   4. Вставь секрет: ${YELLOW}${FULL_SECRET}${NC}"
     echo ""
-    echo -e "${BOLD}🛠 Управление:${NC}"
+    echo -e "${BOLD}🛠 Управление прокси:${NC}"
     echo -e "   • Логи:       ${YELLOW}docker logs -f mtproxy${NC}"
     echo -e "   • Перезапуск: ${YELLOW}docker restart mtproxy${NC}"
     echo -e "   • Удаление:   ${YELLOW}docker rm -f mtproxy${NC}"
@@ -193,10 +243,10 @@ print_result() {
 
 # Главная функция
 main() {
-    clear
     banner
     check_root
     install_docker
+    pull_docker_image
     get_params
     generate_secret
     run_container
