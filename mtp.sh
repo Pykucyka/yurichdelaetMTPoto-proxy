@@ -5,7 +5,7 @@
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 11.0 (build from source, always latest)
+# Version: 11.1 (fixed missing cc linker)
 # ============================================================
 
 set -euo pipefail
@@ -40,7 +40,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v11.0${CYAN}                               ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v11.1${CYAN}                               ║${NC}"
     echo -e "${CYAN}║${NC}              ${WHITE}Telemt (built from source) | Fake TLS${CYAN}         ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -54,6 +54,23 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "Запустите скрипт с правами root: sudo ./mtp.sh"
+    fi
+}
+
+install_build_deps() {
+    step "Устанавливаем компилятор C и инструменты сборки..."
+    if command -v apt-get &> /dev/null; then
+        apt-get update -qq
+        apt-get install -y -qq build-essential pkg-config libssl-dev > /dev/null 2>&1
+        success "Установлены build-essential, libssl-dev, pkg-config"
+    elif command -v yum &> /dev/null; then
+        yum install -y -q gcc gcc-c++ make openssl-devel > /dev/null 2>&1
+        success "Установлены gcc, make, openssl-devel"
+    elif command -v dnf &> /dev/null; then
+        dnf install -y -q gcc gcc-c++ make openssl-devel > /dev/null 2>&1
+        success "Установлены gcc, make, openssl-devel"
+    else
+        warn "Не удалось определить менеджер пакетов. Убедитесь, что установлены gcc, make и openssl-dev"
     fi
 }
 
@@ -148,7 +165,6 @@ create_config() {
     step "Создаём конфиг /etc/telemt/config.toml..."
     mkdir -p /etc/telemt
     cat > /etc/telemt/config.toml << EOF
-# Telemt configuration with Fake TLS
 secret = "$SECRET"
 bind = "0.0.0.0:$PROXY_PORT"
 users = []
@@ -318,6 +334,7 @@ print_result() {
 main() {
     banner
     check_root
+    install_build_deps
     install_rust
     build_telemt
     get_params
