@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-# =============================================
-# MTProto Proxy Installer with Fake TLS
+# ============================================================
+# MTProto Proxy Installer with Fake TLS & Auto-Updater
 # Author: yurichdelaet
 # GitHub: https://github.com/Pykucyka/yurichdelaetMTPoto-proxy
 # License: MIT
-# Version: 3.4 (fixed global command + domain support)
-# =============================================
+# Version: 4.0
+# ============================================================
 
 set -euo pipefail
 
@@ -22,20 +22,11 @@ BOLD='\033[1m'
 BLINK='\033[5m'
 NC='\033[0m'
 
-# Спиннер
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while ps -p "$pid" &>/dev/null; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
+# Версия скрипта (локальная)
+SCRIPT_VERSION="4.0"
+REPO_OWNER="Pykucyka"
+REPO_NAME="yurichdelaetMTPoto-proxy"
+REPO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/mtp.sh"
 
 # Баннер
 banner() {
@@ -57,23 +48,65 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v3.4${CYAN}                                ║${NC}"
-    echo -e "${CYAN}║${NC}              ${WHITE}Global command: yurich | TUI Menu${CYAN}              ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v${SCRIPT_VERSION}${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}              ${WHITE}Auto-update | TUI Menu | Domain support${CYAN}       ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
+# Вспомогательные функции
 step() { echo -e "${BLUE}[➜]${NC} $1"; }
 success() { echo -e "${GREEN}[✓]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while ps -p "$pid" &>/dev/null; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
+# Проверка root
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "Запустите скрипт с правами root: sudo ./mtp.sh"
     fi
 }
 
+# Автообновление скрипта
+auto_update() {
+    # Получаем удалённую версию
+    local remote_version=$(curl -s -m 5 "$REPO_URL" | grep -m1 'SCRIPT_VERSION="' | sed 's/.*SCRIPT_VERSION="\([^"]*\)".*/\1/')
+    if [[ -n "$remote_version" && "$remote_version" != "$SCRIPT_VERSION" ]]; then
+        echo -e "${YELLOW}Доступна новая версия $remote_version (текущая $SCRIPT_VERSION)${NC}"
+        echo -n "Обновить? [Y/n]: "
+        read -r answer
+        if [[ "$answer" != "n" && "$answer" != "N" ]]; then
+            echo -e "${BLUE}Обновляем скрипт...${NC}"
+            local temp_script=$(mktemp)
+            curl -s -o "$temp_script" "$REPO_URL"
+            if [[ -s "$temp_script" ]]; then
+                cp "$temp_script" "$0"
+                chmod +x "$0"
+                rm "$temp_script"
+                echo -e "${GREEN}Обновлено! Перезапустите команду.${NC}"
+                exit 0
+            else
+                warn "Не удалось загрузить обновление"
+            fi
+        fi
+    fi
+}
+
+# Установка Docker
 install_docker() {
     if ! command -v docker &> /dev/null; then
         step "Docker не найден. Скачиваем установщик..."
@@ -102,6 +135,25 @@ pull_docker_image() {
     success "Образ загружен"
 }
 
+# Проверка DNS для домена
+check_dns() {
+    local domain=$1
+    local server_ip=$2
+    local resolved_ip=$(dig +short "$domain" | head -1)
+    if [[ -z "$resolved_ip" ]]; then
+        warn "Домен $domain не резолвится в IP. Убедитесь, что DNS запись настроена."
+        read -p "Продолжить всё равно? [y/N]: " cont
+        [[ "$cont" != "y" && "$cont" != "Y" ]] && error "Установка отменена."
+    elif [[ "$resolved_ip" != "$server_ip" ]]; then
+        warn "Домен $domain резолвится в $resolved_ip, но IP сервера $server_ip. Убедитесь, что A-запись указывает на этот сервер."
+        read -p "Продолжить? [y/N]: " cont
+        [[ "$cont" != "y" && "$cont" != "Y" ]] && error "Установка отменена."
+    else
+        success "DNS проверка пройдена: домен -> $resolved_ip"
+    fi
+}
+
+# Получение параметров установки
 get_params() {
     echo ""
     step "Настройка прокси"
@@ -124,13 +176,13 @@ get_params() {
         SERVER_ADDR="$CUSTOM_DOMAIN"
         success "Будет использован домен: $CUSTOM_DOMAIN"
     else
-        SERVER_ADDR=""  # будет определён позже как IP
+        SERVER_ADDR=""
         success "Будет использован IP-адрес сервера"
     fi
 
     read -p "Домен маскировки (Fake TLS) [cloudflare.com]: " DOMAIN
     DOMAIN=${DOMAIN:-cloudflare.com}
-    success "Порт: $PROXY_PORT, домен маскировки: $DOMAIN"
+    success "Порт: $PROXY_PORT, маскировка: $DOMAIN"
 }
 
 generate_secret() {
@@ -167,6 +219,13 @@ get_public_ip() {
     if [[ -n "$SERVER_ADDR" ]]; then
         IP="$SERVER_ADDR"
         success "Используем домен: $IP"
+        # Проверим DNS
+        local real_ip=$(curl -s -4 ifconfig.me)
+        if [[ -n "$real_ip" ]]; then
+            check_dns "$IP" "$real_ip"
+        else
+            warn "Не удалось определить внешний IP для проверки DNS"
+        fi
     else
         step "Определяем внешний IP..."
         IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || curl -s -4 ipinfo.io/ip)
@@ -207,7 +266,6 @@ get_proxy_link() {
 }
 
 create_global_command() {
-    # Создаём глобальную команду yurich
     cat > /usr/local/bin/yurich << 'EOF'
 #!/bin/bash
 if [[ "$EUID" -ne 0 ]]; then
@@ -223,34 +281,70 @@ else
 fi
 EOF
     chmod +x /usr/local/bin/yurich
-    success "Глобальная команда 'yurich' создана (запускайте: sudo yurich)"
+    success "Глобальная команда 'yurich' создана"
 }
 
-# TUI-меню
+# ========================== МЕНЮ И СТАТИСТИКА ==========================
+
 show_stats() {
     clear
     banner
-    echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ В РЕАЛЬНОМ ВРЕМЕНИ${NC}"
+    echo -e "${GREEN}📊 СТАТИСТИКА ПРОКСИ (один раз)${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
     if ! docker ps | grep -q mtproxy; then
         echo -e "${RED}❌ Контейнер mtproxy не запущен!${NC}"
-        echo -e "Запустите: ${YELLOW}docker start mtproxy${NC}"
         echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
         read
         return
     fi
-    echo -e "${YELLOW}📈 Использование ресурсов (CPU / RAM / NET):${NC}"
+    echo -e "${YELLOW}📈 Использование ресурсов:${NC}"
     docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" | grep -E "mtproxy|CONTAINER" | sed 's/^/   /'
     echo ""
     echo -e "${YELLOW}🌐 Сетевые подключения:${NC}"
     CONNS=$(docker exec mtproxy ss -tun 2>/dev/null | tail -n +2 | wc -l || echo "0")
     echo -e "   ➤ Активных TCP-соединений: ${GREEN}${CONNS}${NC}"
     echo ""
-    echo -e "${YELLOW}📡 Веб-интерфейс статистики:${NC}"
-    echo -e "   ➤ http://${IP}:8080 (статистика подключений)"
-    echo -e "   ➤ Для просмотра логов используйте пункт меню 'Логи'"
+    echo -e "${YELLOW}📡 Веб-интерфейс:${NC}"
+    echo -e "   ➤ http://${IP}:8080 (статистика)"
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
+}
+
+show_realtime_stats() {
+    clear
+    banner
+    echo -e "${GREEN}📊 СТАТИСТИКА В РЕАЛЬНОМ ВРЕМЕНИ (обновление каждые 2 сек)${NC}"
+    echo -e "${CYAN}Нажмите 'q' для выхода${NC}"
+    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+    while true; do
+        if ! docker ps | grep -q mtproxy; then
+            echo -e "${RED}❌ Контейнер mtproxy остановлен!${NC}"
+            break
+        fi
+        clear
+        banner
+        echo -e "${GREEN}📊 СТАТИСТИКА В РЕАЛЬНОМ ВРЕМЕНИ (обновление каждые 2 сек)${NC}"
+        echo -e "${CYAN}Нажмите 'q' для выхода${NC}"
+        echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+        echo ""
+        echo -e "${YELLOW}📈 Загрузка контейнера:${NC}"
+        docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" | grep -E "mtproxy|CONTAINER" | sed 's/^/   /'
+        echo ""
+        echo -e "${YELLOW}🌐 Активные соединения:${NC}"
+        CONNS=$(docker exec mtproxy ss -tun 2>/dev/null | tail -n +2 | wc -l || echo "0")
+        echo -e "   ➤ TCP-соединений: ${GREEN}${CONNS}${NC}"
+        echo ""
+        echo -e "${YELLOW}⏱️  Время работы контейнера:${NC}"
+        UPTIME=$(docker inspect -f '{{.State.StartedAt}}' mtproxy 2>/dev/null)
+        if [[ -n "$UPTIME" ]]; then
+            echo -e "   ➤ Запущен: ${WHITE}${UPTIME}${NC}"
+        fi
+        echo -e "\n${BLUE}Обновление... (q - выход)${NC}"
+        read -t 2 -n 1 key
+        if [[ "$key" == "q" ]]; then
+            break
+        fi
+    done
 }
 
 show_info() {
@@ -271,13 +365,44 @@ show_info() {
     fi
     echo -e "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}${IP}${NC}"
     echo -e "   ${BOLD}Порт:${NC}                 ${YELLOW}${PROXY_PORT}${NC}"
-    echo -e "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}${DOMAIN}${NC}"
-    echo -e "   ${BOLD}Fake TLS секрет (ПОЛНЫЙ):${NC}"
+    echo -e "   ${BOLD}Маскировка:${NC}           ${YELLOW}${DOMAIN}${NC}"
+    echo -e "   ${BOLD}Fake TLS секрет:${NC}"
     echo -e "   ${WHITE}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${MAGENTA}🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ${NC}"
-    echo -e "   Telegram-ссылка: ${GREEN}tg://proxy?server=${IP}&port=${PROXY_PORT}&secret=${FULL_SECRET}${NC}"
-    echo -e "   Альтернативная: ${WHITE}https://t.me/proxy?server=${IP}&port=${PROXY_PORT}&secret=${FULL_SECRET}${NC}"
+    echo -e "   Telegram: ${GREEN}tg://proxy?server=${IP}&port=${PROXY_PORT}&secret=${FULL_SECRET}${NC}"
+    echo -e "   Альт:     ${WHITE}https://t.me/proxy?server=${IP}&port=${PROXY_PORT}&secret=${FULL_SECRET}${NC}"
+    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
+    read
+}
+
+change_domain() {
+    clear
+    banner
+    echo -e "${GREEN}🌐 ИЗМЕНЕНИЕ ДОМЕНА/IP${NC}"
+    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
+    echo -e "Текущий адрес: ${YELLOW}${IP}${NC}"
+    read -p "Введите новый домен или IP (Enter для автоопределения IP): " NEW_ADDR
+    if [[ -n "$NEW_ADDR" ]]; then
+        # Проверка DNS, если это домен (содержит буквы)
+        if [[ "$NEW_ADDR" =~ [a-zA-Z] ]]; then
+            real_ip=$(curl -s -4 ifconfig.me)
+            if [[ -n "$real_ip" ]]; then
+                check_dns "$NEW_ADDR" "$real_ip"
+            fi
+        fi
+        IP="$NEW_ADDR"
+        success "Адрес изменён на: $IP"
+        # Перезаписываем ссылку в информации (не в контейнере)
+    else
+        NEW_IP=$(curl -s -4 ifconfig.me)
+        if [[ -n "$NEW_IP" ]]; then
+            IP="$NEW_IP"
+            success "IP обновлён автоматически: $IP"
+        else
+            warn "Не удалось определить IP"
+        fi
+    fi
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
 }
@@ -287,18 +412,14 @@ update_script() {
     banner
     echo -e "${GREEN}🔄 ОБНОВЛЕНИЕ СКРИПТА${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    cd "$SCRIPT_DIR"
-    if [[ -d ".git" ]]; then
-        git pull origin main
-        echo -e "${GREEN}✅ Скрипт обновлён.${NC}"
+    local temp_script=$(mktemp)
+    if curl -s -o "$temp_script" "$REPO_URL"; then
+        cp "$temp_script" /opt/mtproto-proxy/mtp.sh
+        chmod +x /opt/mtproto-proxy/mtp.sh
+        rm "$temp_script"
+        success "Скрипт обновлён. Перезапустите меню."
     else
-        echo -e "${RED}❌ Репозиторий не найден. Скачиваем заново...${NC}"
-        cd /tmp
-        git clone https://github.com/Pykucyka/yurichdelaetMTPoto-proxy.git
-        cp yurichdelaetMTPoto-proxy/mtp.sh "$SCRIPT_DIR/mtp.sh"
-        chmod +x "$SCRIPT_DIR/mtp.sh"
-        echo -e "${GREEN}✅ Скрипт обновлён.${NC}"
+        error "Не удалось загрузить обновление"
     fi
     echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
     read
@@ -311,7 +432,7 @@ reinstall_proxy() {
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
     OLD_SECRET=$(docker inspect mtproxy 2>/dev/null | grep -oP '"SECRET":\s*"\K[^"]+' || echo "")
     if [[ -n "$OLD_SECRET" ]]; then
-        echo -e "Используем существующий секрет."
+        echo -e "Сохраняем существующий секрет."
         FULL_SECRET="$OLD_SECRET"
         PROXY_PORT=$(docker inspect mtproxy | grep -oP '"HostPort":\s*"\K[^"]+' | head -1)
     else
@@ -354,35 +475,15 @@ restart_proxy() {
     read
 }
 
-change_domain() {
-    clear
-    banner
-    echo -e "${GREEN}🌐 ИЗМЕНЕНИЕ ДОМЕНА/IP${NC}"
-    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e "Текущий адрес: ${YELLOW}${IP}${NC}"
-    read -p "Введите новый домен или IP (оставьте пустым для автоопределения IP): " NEW_ADDR
-    if [[ -n "$NEW_ADDR" ]]; then
-        IP="$NEW_ADDR"
-        success "Адрес изменён на: $IP"
-        # Обновляем ссылку в информации
-        echo -e "${GREEN}✅ Адрес обновлён. Используйте новый в Telegram.${NC}"
-    else
-        # автоопределение IP
-        NEW_IP=$(curl -s -4 ifconfig.me)
-        if [[ -n "$NEW_IP" ]]; then
-            IP="$NEW_IP"
-            success "IP обновлён автоматически: $IP"
-        else
-            warn "Не удалось определить IP автоматически, оставлен старый: $IP"
-        fi
-    fi
-    echo -e "\n${BOLD}Нажмите Enter, чтобы вернуться...${NC}"
-    read
-}
-
+# Главное меню
 show_menu() {
-    # Получаем текущий IP/домен один раз при входе в меню
+    # Обновляем IP/домен при входе
     IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || echo "unknown")
+    # Если в контейнере используется домен, подхватываем его (можно из переменной окружения)
+    local container_addr=$(docker inspect mtproxy 2>/dev/null | grep -oP '"SERVER_ADDR":\s*"\K[^"]+' || echo "")
+    if [[ -n "$container_addr" ]]; then
+        IP="$container_addr"
+    fi
     while true; do
         clear
         banner
@@ -390,38 +491,34 @@ show_menu() {
         echo -e "${GREEN}║                    📋 МЕНЮ УПРАВЛЕНИЯ                      ║${NC}"
         echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
         echo ""
-        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика прокси (нагрузка, подключения)${NC}"
-        echo -e "   ${CYAN}2${NC} ─ ${YELLOW}ℹ️  Информация о прокси (секрет, ссылка)${NC}"
-        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}🌐 Изменить домен/IP для подключения${NC}"
-        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🔄 Обновить скрипт до актуального коммита${NC}"
-        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}🔁 Переустановить прокси (сохраняя секрет)${NC}"
-        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}📜 Просмотр последних логов${NC}"
-        echo -e "   ${CYAN}7${NC} ─ ${YELLOW}♻️  Перезапустить прокси-контейнер${NC}"
-        echo -e "   ${CYAN}0${NC} ─ ${RED}🚪 Выход (вернуться в командную строку)${NC}"
+        echo -e "   ${CYAN}1${NC} ─ ${YELLOW}📊 Статистика (один раз)${NC}"
+        echo -e "   ${CYAN}2${NC} ─ ${YELLOW}🔄 Статистика в реальном времени (обновление)${NC}"
+        echo -e "   ${CYAN}3${NC} ─ ${YELLOW}ℹ️  Информация о прокси${NC}"
+        echo -e "   ${CYAN}4${NC} ─ ${YELLOW}🌐 Изменить домен/IP${NC}"
+        echo -e "   ${CYAN}5${NC} ─ ${YELLOW}🔄 Обновить скрипт${NC}"
+        echo -e "   ${CYAN}6${NC} ─ ${YELLOW}🔁 Переустановить прокси${NC}"
+        echo -e "   ${CYAN}7${NC} ─ ${YELLOW}📜 Логи (последние 50 строк)${NC}"
+        echo -e "   ${CYAN}8${NC} ─ ${YELLOW}♻️  Перезапустить прокси${NC}"
+        echo -e "   ${CYAN}0${NC} ─ ${RED}🚪 Выход${NC}"
         echo ""
-        echo -ne "${BOLD}Выберите пункт меню (0-7): ${NC}"
+        echo -ne "${BOLD}Выберите пункт (0-8): ${NC}"
         read choice
         case $choice in
             1) show_stats ;;
-            2) show_info ;;
-            3) change_domain ;;
-            4) update_script ;;
-            5) reinstall_proxy ;;
-            6) view_logs ;;
-            7) restart_proxy ;;
-            0)
-                clear
-                echo -e "${GREEN}До свидания! Для повторного входа выполните: sudo yurich${NC}"
-                exit 0
-                ;;
-            *) 
-                echo -e "${RED}Неверный выбор. Нажмите Enter...${NC}"
-                read
-                ;;
+            2) show_realtime_stats ;;
+            3) show_info ;;
+            4) change_domain ;;
+            5) update_script ;;
+            6) reinstall_proxy ;;
+            7) view_logs ;;
+            8) restart_proxy ;;
+            0) clear; echo -e "${GREEN}До свидания! Для входа: sudo yurich${NC}"; exit 0 ;;
+            *) echo -e "${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac
     done
 }
 
+# Установка прокси
 install_proxy() {
     banner
     check_root
@@ -433,24 +530,10 @@ install_proxy() {
     get_public_ip
     open_firewall
     get_proxy_link
-    # Сохраняем сам скрипт в /opt/mtproto-proxy/
     mkdir -p /opt/mtproto-proxy
-    # Определяем, откуда запущен скрипт (если через curl, то временный файл)
-    SCRIPT_SOURCE="${BASH_SOURCE[0]}"
-    if [[ "$SCRIPT_SOURCE" == "/dev/fd/"* ]] || [[ ! -f "$SCRIPT_SOURCE" ]]; then
-        # Скрипт запущен через pipe, нужно сохранить его содержимое
-        cat > /opt/mtproto-proxy/mtp.sh << 'INNEREOF'
-# Сюда будет вставлено содержимое скрипта. Используем временный костыль.
-# На самом деле мы сейчас перезаписываем этот же блок, поэтому лучше просто скопировать текущий файл.
-# Вместо этого мы используем другой подход: скачаем скрипт из репозитория.
-INNEREOF
-        # Скачиваем сам себя из репозитория
-        curl -s -o /opt/mtproto-proxy/mtp.sh "https://raw.githubusercontent.com/Pykucyka/yurichdelaetMTPoto-proxy/main/mtp.sh"
-        chmod +x /opt/mtproto-proxy/mtp.sh
-    else
-        cp "$SCRIPT_SOURCE" /opt/mtproto-proxy/mtp.sh
-        chmod +x /opt/mtproto-proxy/mtp.sh
-    fi
+    # Сохраняем текущий скрипт в /opt/mtproto-proxy/mtp.sh
+    cp "$0" /opt/mtproto-proxy/mtp.sh
+    chmod +x /opt/mtproto-proxy/mtp.sh
     create_global_command
     print_result
 }
@@ -464,8 +547,8 @@ print_result() {
     echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
     printf "   ${BOLD}Адрес сервера:${NC}         ${YELLOW}%s${NC}\n" "$IP"
     printf "   ${BOLD}Порт:${NC}                 ${YELLOW}%s${NC}\n" "$PROXY_PORT"
-    printf "   ${BOLD}Домен маскировки:${NC}     ${YELLOW}%s${NC}\n" "$DOMAIN"
-    printf "   ${BOLD}Fake TLS секрет (ПОЛНЫЙ):${NC}\n"
+    printf "   ${BOLD}Маскировка:${NC}           ${YELLOW}%s${NC}\n" "$DOMAIN"
+    printf "   ${BOLD}Fake TLS секрет:${NC}\n"
     echo -e "   ${WHITE}${FULL_SECRET}${NC}"
     echo ""
     echo -e "${MAGENTA}🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ${NC}"
@@ -474,15 +557,14 @@ print_result() {
     echo ""
     echo -e "${YELLOW}📊 СТАТИСТИКА И ТЕЛЕМЕТРИЯ${NC}"
     echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
-    echo -e "   Статистика в веб-интерфейсе: ${WHITE}http://${IP}:8080${NC}"
+    echo -e "   Веб-интерфейс: ${WHITE}http://${IP}:8080${NC}"
     echo ""
     echo -e "${BLUE}🤖 РЕГИСТРАЦИЯ В @MTProxybot${NC}"
     echo -e "${BLUE}────────────────────────────────────────────────────────${NC}"
     echo -e "   Отправь боту /newproxy → введи ${CYAN}${IP}${NC} и порт ${CYAN}${PROXY_PORT}${NC}"
     echo -e "   → вставь секрет: ${YELLOW}${FULL_SECRET}${NC}"
     echo ""
-    echo -e "${GREEN}💡 Теперь вы можете управлять прокси командой:${NC}"
-    echo -e "   ${YELLOW}sudo yurich${NC}"
+    echo -e "${GREEN}💡 Управление прокси: sudo yurich${NC}"
     echo ""
     show_github_link
 }
@@ -490,18 +572,22 @@ print_result() {
 show_github_link() {
     echo -e "${YELLOW}${BLINK}══════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}${BLINK}   ⭐ Если скрипт был полезен, поставь звезду на GitHub!   ${NC}"
-    echo -e "${YELLOW}${BLINK}   👉 https://github.com/Pykucyka/yurichdelaetMTPoto-proxy${NC}"
+    echo -e "${YELLOW}${BLINK}   👉 https://github.com/${REPO_OWNER}/${REPO_NAME}${NC}"
     echo -e "${YELLOW}${BLINK}══════════════════════════════════════════════════════════${NC}"
     echo ""
 }
 
+# Точка входа
 main() {
     if [[ "${1:-}" == "--menu" ]]; then
+        # Проверяем, установлен ли прокси
         if ! docker ps -a &>/dev/null || ! docker inspect mtproxy &>/dev/null; then
             echo -e "${RED}❌ Прокси не установлен или Docker не запущен.${NC}"
             echo -e "Сначала установите: ${YELLOW}./mtp.sh${NC}"
             exit 1
         fi
+        # Автообновление скрипта (если есть новая версия)
+        auto_update
         show_menu
     else
         install_proxy
