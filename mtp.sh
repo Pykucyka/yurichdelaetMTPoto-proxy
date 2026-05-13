@@ -21,7 +21,7 @@ BOLD='\033[1m'
 BLINK='\033[5m'
 NC='\033[0m'
 
-# Спиннер
+# Спиннер для длительных операций
 spinner() {
     local pid=$1
     local delay=0.1
@@ -36,7 +36,7 @@ spinner() {
     printf "    \b\b\b\b"
 }
 
-# Баннер
+# Баннер (крупно YURICH DELAET, без изменений)
 banner() {
     clear
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -56,7 +56,7 @@ banner() {
     echo -e "${CYAN}║${NC}     ${MAGENTA}╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝   ╚═╝${CYAN}          ║${NC}"
     echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}              ${YELLOW}🚀 MTProto Proxy for Telegram 🚀${CYAN}               ║${NC}"
-    echo -e "${CYAN}║${NC}                         ${GREEN}v2.2${CYAN}                                ║${NC}"
+    echo -e "${CYAN}║${NC}                         ${GREEN}v2.3${CYAN}                                ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -74,7 +74,7 @@ check_root() {
     fi
 }
 
-# Установка Docker
+# Установка Docker с прогресс-баром
 install_docker() {
     if ! command -v docker &> /dev/null; then
         step "Docker не найден. Скачиваем установщик..."
@@ -118,7 +118,7 @@ get_params() {
     success "Порт: $PROXY_PORT, домен: $DOMAIN"
 }
 
-# Генерация полного Fake TLS секрета (он же будет использоваться и для бота, и для контейнера)
+# Генерация полного Fake TLS секрета
 generate_secret() {
     step "Генерация Fake TLS секрета..."
     (
@@ -135,7 +135,7 @@ generate_secret() {
     success "Fake TLS секрет создан"
 }
 
-# Запуск контейнера с полным секретом
+# Запуск контейнера
 run_container() {
     step "Запускаем контейнер..."
     docker rm -f mtproxy 2>/dev/null || true
@@ -150,7 +150,7 @@ run_container() {
     success "Контейнер запущен"
 }
 
-# Получение IP
+# Получение внешнего IP
 get_public_ip() {
     step "Определяем внешний IP..."
     IP=$(curl -s -4 ifconfig.me || curl -s -4 icanhazip.com || curl -s -4 ipinfo.io/ip)
@@ -213,35 +213,64 @@ show_github_link() {
     echo ""
 }
 
-# Итоговый вывод
+# КРАСИВЫЙ ФИНАЛЬНЫЙ ВЫВОД (дизайн)
 print_result() {
     banner
-    success "Установка успешно завершена!"
+    echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║                    ✅ УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА              ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${BOLD}📦 Данные прокси:${NC}"
-    echo -e "   • IP:      ${CYAN}${IP}${NC}"
-    echo -e "   • Порт:    ${CYAN}${PROXY_PORT}${NC}"
-    echo -e "   • Домен:   ${CYAN}${DOMAIN}${NC}"
-    echo -e "   • Fake TLS секрет (ПОЛНЫЙ): ${YELLOW}${FULL_SECRET}${NC}"
+
+    # Блок параметров прокси
+    echo -e "${CYAN}┌───────────────────── 📡 ПАРАМЕТРЫ ПРОКСИ ──────────────────────┐${NC}"
+    echo -e "${CYAN}│${NC}"
+    printf "${CYAN}│${NC}   • ${BOLD}IP-адрес сервера:${NC}     ${YELLOW}%-35s${NC} ${CYAN}│${NC}\n" "$IP"
+    printf "${CYAN}│${NC}   • ${BOLD}Порт:${NC}                 ${YELLOW}%-35s${NC} ${CYAN}│${NC}\n" "$PROXY_PORT"
+    printf "${CYAN}│${NC}   • ${BOLD}Домен маскировки:${NC}     ${YELLOW}%-35s${NC} ${CYAN}│${NC}\n" "$DOMAIN"
+    printf "${CYAN}│${NC}   • ${BOLD}Fake TLS секрет (ПОЛНЫЙ):${NC}                   ${CYAN}│${NC}\n"
+    printf "${CYAN}│${NC}     ${WHITE}%-51s${NC} ${CYAN}│${NC}\n" "$FULL_SECRET"
+    echo -e "${CYAN}│${NC}"
+    echo -e "${CYAN}└────────────────────────────────────────────────────────────────┘${NC}"
     echo ""
-    echo -e "${BOLD}🔗 Готовая ссылка (нажми на неё в Telegram):${NC}"
-    echo -e "   ${MAGENTA}${PROXY_LINK}${NC}"
+
+    # Блок ссылок
+    echo -e "${MAGENTA}┌───────────────────── 🔗 ССЫЛКИ ДЛЯ ПОДКЛЮЧЕНИЯ ───────────────────┐${NC}"
+    echo -e "${MAGENTA}│${NC}"
+    echo -e "${MAGENTA}│${NC}   Telegram-ссылка (нажми на неё):"
+    printf "${MAGENTA}│${NC}   ${GREEN}%-51s${NC} ${MAGENTA}│${NC}\n" "$PROXY_LINK"
+    echo -e "${MAGENTA}│${NC}"
+    echo -e "${MAGENTA}│${NC}   Альтернативная ссылка для @MTProxybot:"
+    printf "${MAGENTA}│${NC}   ${WHITE}https://t.me/proxy?server=%s&port=%s&secret=%s${NC}\n" "$IP" "$PROXY_PORT" "$FULL_SECRET"
+    echo -e "${MAGENTA}│${NC}"
+    echo -e "${MAGENTA}└──────────────────────────────────────────────────────────────────┘${NC}"
     echo ""
-    echo -e "${BOLD}🤖 Регистрация в @MTProxybot:${NC}"
-    echo -e "   1. Открой ${CYAN}@MTProxybot${NC}"
-    echo -e "   2. Отправь команду ${YELLOW}/newproxy${NC}"
-    echo -e "   3. Введи ${CYAN}${IP}${NC} и порт ${CYAN}${PROXY_PORT}${NC}"
-    echo -e "   4. Вставь ПОЛНЫЙ секрет (скопируй выше): ${YELLOW}${FULL_SECRET}${NC}"
-    echo -e "   5. Бот выдаст TAG — сохрани его (необязательно)."
-    echo -e "   6. После этого скопируй ссылку, которую даст бот, и нажми на неё — подключение будет работать."
+
+    # Блок регистрации в боте
+    echo -e "${YELLOW}┌───────────────────── 🤖 РЕГИСТРАЦИЯ В @MTProxybot ─────────────────┐${NC}"
+    echo -e "${YELLOW}│${NC}"
+    echo -e "${YELLOW}│${NC}   ${BOLD}1.${NC} Открой бота: ${CYAN}@MTProxybot${NC}"
+    echo -e "${YELLOW}│${NC}   ${BOLD}2.${NC} Отправь команду ${GREEN}/newproxy${NC}"
+    echo -e "${YELLOW}│${NC}   ${BOLD}3.${NC} Введи IP: ${CYAN}${IP}${NC}  и порт: ${CYAN}${PROXY_PORT}${NC}"
+    echo -e "${YELLOW}│${NC}   ${BOLD}4.${NC} Вставь ПОЛНЫЙ секрет (скопируй его выше — длинная строка)"
+    echo -e "${YELLOW}│${NC}   ${BOLD}5.${NC} Бот выдаст TAG — сохрани его (необязательно)."
+    echo -e "${YELLOW}│${NC}"
+    echo -e "${YELLOW}│${NC}   ${RED}⚠️  ВАЖНО:${NC} Используй именно ПОЛНЫЙ секрет! Короткий (32 символа) не подходит."
+    echo -e "${YELLOW}│${NC}"
+    echo -e "${YELLOW}└──────────────────────────────────────────────────────────────────┘${NC}"
     echo ""
-    echo -e "${BOLD}🛠 Управление прокси:${NC}"
-    echo -e "   • Логи:       ${YELLOW}docker logs -f mtproxy${NC}"
-    echo -e "   • Перезапуск: ${YELLOW}docker restart mtproxy${NC}"
-    echo -e "   • Удаление:   ${YELLOW}docker rm -f mtproxy${NC}"
+
+    # Блок управления Docker
+    echo -e "${BLUE}┌───────────────────── 🛠 УПРАВЛЕНИЕ ПРОКСИ (Docker) ──────────────────┐${NC}"
+    echo -e "${BLUE}│${NC}"
+    printf "${BLUE}│${NC}   • Посмотреть логи:     ${WHITE}docker logs -f mtproxy${NC}     ${BLUE}│${NC}\n"
+    printf "${BLUE}│${NC}   • Перезапустить:       ${WHITE}docker restart mtproxy${NC}      ${BLUE}│${NC}\n"
+    printf "${BLUE}│${NC}   • Остановить:          ${WHITE}docker stop mtproxy${NC}         ${BLUE}│${NC}\n"
+    printf "${BLUE}│${NC}   • Запустить:           ${WHITE}docker start mtproxy${NC}        ${BLUE}│${NC}\n"
+    printf "${BLUE}│${NC}   • Удалить полностью:   ${WHITE}docker rm -f mtproxy${NC}        ${BLUE}│${NC}\n"
+    echo -e "${BLUE}│${NC}"
+    echo -e "${BLUE}└──────────────────────────────────────────────────────────────────┘${NC}"
     echo ""
-    echo -e "${BOLD}⚠️  ВАЖНО:${NC} Используйте именно ПОЛНЫЙ секрет (длинная строка), который выводит скрипт. Короткий (32 символа) НЕ подходит для Fake TLS."
-    echo ""
+
     show_github_link
 }
 
